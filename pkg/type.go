@@ -1,4 +1,4 @@
-package events
+package pkg
 
 type Fetcher interface {
 	Fetch(limit int) ([]Event, error)
