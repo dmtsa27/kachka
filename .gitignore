@@ -1,0 +1,15 @@
+# Игнорируем скомпилированный бот
+gym-bot
+*.exe
+
+#безпека
+
+*.db
+pg_data/
+.env
+.bin
+
+#сміття
+.DS_Store
+.idea/
+.vscode/
