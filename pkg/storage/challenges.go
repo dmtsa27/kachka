@@ -13,12 +13,14 @@ type Challenge struct {
 }
 
 func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) error {
-	query := `INSERT INTO challenges (is_active, challenge_duration)
-	VALUES ($1, $2)
-	
-	`
+	query := `INSERT INTO challenges (days_per_week, challenge_duration, is_active)
+	VALUES ($1, $2, $3)`
 
-	_, err := s.db.ExecContext(ctx, query, challenge.IsActive, challenge.Duration)
+	_, err := s.db.ExecContext(ctx, query,
+		challenge.DaysPerWeek,
+		challenge.Duration,
+		challenge.IsActive,
+	)
 
 	return err
 }
@@ -26,10 +28,10 @@ func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) erro
 func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge, error) {
 	var challenge Challenge
 	query := `SELECT id, days_per_week, challenge_duration, is_active
-			  FROM challenges
-			  WHERE id = $1
-			  `
-	err := s.db.QueryRowContext(ctx, query).Scan(
+              FROM challenges
+              WHERE id = $1`
+
+	err := s.db.QueryRowContext(ctx, query, challengeID).Scan(
 		&challenge.ChallengeID,
 		&challenge.DaysPerWeek,
 		&challenge.Duration,
@@ -45,20 +47,16 @@ func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge
 
 func (s *Storage) UpdateChallenge(ctx context.Context, challenge Challenge) error {
 	query := `UPDATE challenges
-			  SET challenge_duration = $1, is_active = $
-			  WHERE id = $3`
+              SET challenge_duration = $1, is_active = $2
+              WHERE id = $3`
+
 	_, err := s.db.ExecContext(ctx, query,
-		challenge.DaysPerWeek,
 		challenge.Duration,
 		challenge.IsActive,
 		challenge.ChallengeID,
 	)
 
-	if err != nil {
-		return err
-	}
-	return nil
-
+	return err
 }
 
 func (s *Storage) SetWeekRules(ctx context.Context, challengeID int, days int) error {
@@ -67,13 +65,16 @@ func (s *Storage) SetWeekRules(ctx context.Context, challengeID int, days int) e
         SET days_per_week = $1 
         WHERE id = $2 AND days_per_week = 0`
 
-	result, err := s.db.ExecContext(ctx, query)
-
+	result, err := s.db.ExecContext(ctx, query, days, challengeID)
 	if err != nil {
 		return err
 	}
 
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
 	if rows == 0 {
 		return fmt.Errorf("the rule has already been set for this challenge")
 	}
