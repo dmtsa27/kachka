@@ -6,10 +6,10 @@ import (
 )
 
 type Session struct {
-	id            int
-	user_id       int64
-	started_at    time.Time
-	last_video_at time.Time
+	Id            int
+	User_id       int64
+	Started_at    time.Time
+	Last_video_at time.Time
 }
 
 func (s *Storage) HasTrainedToday(ctx context.Context, userID int64) (bool, error) {
