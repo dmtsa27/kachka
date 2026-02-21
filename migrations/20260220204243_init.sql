@@ -8,7 +8,13 @@ CREATE TABLE users (
 CREATE TABLE workouts(
     id SERIAL PRIMARY KEY,
     user_id BIGINT REFERENCES users(telegram_id),
-    workout_date TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    workout_date TIMESTAMP WITH TIME ZONE
+);
+CREATE TABLE sessions(
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(telegram_id),
+    started_at TIMESTAMP WITH TIME ZONE default NOW(),
+    last_video_at TIMESTAMP WITH TIME ZONE
 );
 
 CREATE TABLE challenges(
@@ -22,6 +28,7 @@ CREATE TABLE challenges(
 -- +goose Down
 -- +goose StatementBegin
 DROP TABLE IF EXISTS workouts;
-DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS challenges;
+DROP TABLE IF EXISTS users;
 -- +goose StatementEnd
