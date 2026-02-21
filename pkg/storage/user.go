@@ -24,6 +24,6 @@ func (s *Storage) CreateUser(ctx context.Context, user User) error {
 	return err
 }
 
-func (s *Storage) ReadUser(ctx context.Context, userID int) (*User, error) {
+/*func (s *Storage) ReadUser(ctx context.Context, userID int) (*User, error) {
 	var myuser User
-}
+}*/

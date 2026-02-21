@@ -15,7 +15,7 @@ type Workout struct {
 }
 
 func (s *Storage) CreateWorkout(ctx context.Context, workout Workout) error {
-	query := `INSERT INTO workouts (user_id)
+	query := `INSERT INTO workouts (user_id, )
 	VALUES ($1)
 	
 	`
