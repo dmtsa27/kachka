@@ -6,7 +6,7 @@ import (
 )
 
 type User struct {
-	UserID      int64
+	TelegramID  int64
 	Username    string
 	DaysTrained int
 	IsActive    bool
@@ -19,7 +19,7 @@ func (s *Storage) CreateUser(ctx context.Context, user User) error {
 	ON CONFLICT (telegram_id) DO NOTHING
 	`
 
-	_, err := s.db.ExecContext(ctx, query, user.UserID, user.Username, user.IsActive)
+	_, err := s.db.ExecContext(ctx, query, user.TelegramID, user.Username, user.IsActive)
 
 	return err
 }
