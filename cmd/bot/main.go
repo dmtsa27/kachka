@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
-	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/joho/godotenv"
@@ -33,28 +31,6 @@ func main() {
 	}
 
 	fmt.Println("Connected to DB")
-
-	ctx := context.Background()
-	myChallenge := storage.Challenge{
-		IsActive:    true,
-		DaysPerWeek: 3,
-		Duration:    180,
-	}
-	err = mystorage.CreateChallenge(ctx, myChallenge)
-
-	if err != nil {
-		log.Fatalf("challenge could not be created: %v", err)
-	}
-	fmt.Println("Challenge created succesfully")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	c, err := mystorage.GetChallenge(ctx, 1)
-	if err != nil {
-		fmt.Printf("Could not get challenge : %+v\n ", err)
-	} else {
-		fmt.Printf("Found challenge: %+v\n", c)
-	}
 
 }
 

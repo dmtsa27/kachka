@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	MinCircleDuration = 50 // seconds
+	MinCircleDuration = 30 // seconds
 	SessionGapMinutes = 20 // minutes between circles to count as workout
 )
 
