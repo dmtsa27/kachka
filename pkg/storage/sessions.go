@@ -8,6 +8,8 @@ import (
 type Session struct {
 	Id            int
 	User_id       int64
+	ChatID        int64
+	MessageID     int
 	Started_at    time.Time
 	Last_video_at time.Time
 }
@@ -29,13 +31,10 @@ func (s *Storage) HasTrainedToday(ctx context.Context, userID int64) (bool, erro
 
 }
 
-func (s *Storage) StartSession(ctx context.Context, userID int64) error {
-	query := `INSERT INTO sessions (user_id, started_at, session_date)
-	VALUES ($1, NOW(), CURRENT_DATE)
-
-	`
-	_, err := s.db.ExecContext(ctx, query, userID)
-
+func (s *Storage) StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error {
+	query := `INSERT INTO sessions (user_id, chat_id, message_id, started_at, session_date)
+	VALUES ($1, $2, $3, NOW(), CURRENT_DATE)`
+	_, err := s.db.ExecContext(ctx, query, userID, chatID, messageID)
 	return err
 }
 
@@ -49,17 +48,27 @@ func (s *Storage) AddLatestSession(ctx context.Context, userID int64) error {
 	return err
 }
 
-func (s *Storage) GetLatestSession(ctx context.Context, userID int64) (time.Time, error) {
-	var sessionTime time.Time
-	query := `SELECT last_video_at
-              FROM sessions
-              WHERE user_id = $1 AND session_date = CURRENT_DATE`
+func (s *Storage) GetSession(ctx context.Context, userID int64) (*Session, error) {
+	var session Session
+	query := `SELECT id, user_id, started_at, last_video_at
+	          FROM sessions
+	          WHERE user_id = $1 AND session_date = CURRENT_DATE`
 
-	err := s.db.QueryRowContext(ctx, query, userID).Scan(&sessionTime)
-
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(
+		&session.Id,
+		&session.User_id,
+		&session.Started_at,
+		&session.Last_video_at,
+	)
 	if err != nil {
-		return time.Time{}, err
+		return nil, err
 	}
 
-	return sessionTime, nil
+	return &session, nil
+}
+
+func (s *Storage) DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error {
+	query := `DELETE FROM sessions WHERE chat_id = $1 AND message_id = $2 AND session_date = CURRENT_DATE`
+	_, err := s.db.ExecContext(ctx, query, chatID, messageID)
+	return err
 }

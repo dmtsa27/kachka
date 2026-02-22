@@ -59,6 +59,24 @@ func (s *Storage) UpdateChallenge(ctx context.Context, challenge Challenge) erro
 	return err
 }
 
+func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
+	var challenge Challenge
+	query := `SELECT id, days_per_week, challenge_duration, is_active
+              FROM challenges WHERE is_active = true LIMIT 1`
+
+	err := s.db.QueryRowContext(ctx, query).Scan(
+		&challenge.ChallengeID,
+		&challenge.DaysPerWeek,
+		&challenge.Duration,
+		&challenge.IsActive,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &challenge, nil
+}
+
 func (s *Storage) SetWeekRules(ctx context.Context, challengeID int, days int) error {
 	query := `
         UPDATE challenges 

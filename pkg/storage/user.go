@@ -24,6 +24,41 @@ func (s *Storage) CreateUser(ctx context.Context, user User) error {
 	return err
 }
 
-/*func (s *Storage) ReadUser(ctx context.Context, userID int) (*User, error) {
+func (s *Storage) ReadUser(ctx context.Context, userID int64) (*User, error) {
 	var myuser User
-}*/
+	query := `SELECT telegram_id, username, days_trained, is_active, failed_at FROM users WHERE telegram_id = $1`
+
+	err := s.db.QueryRowContext(ctx, query, userID).Scan(&myuser.TelegramID, &myuser.Username, &myuser.DaysTrained, &myuser.IsActive, &myuser.FailedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &myuser, nil
+}
+
+func (s *Storage) DeactivateUser(ctx context.Context, userID int64) error {
+	query := `UPDATE users SET is_active = false, failed_at = NOW() WHERE telegram_id = $1`
+	_, err := s.db.ExecContext(ctx, query, userID)
+	return err
+}
+
+func (s *Storage) GetAllActiveUsers(ctx context.Context) ([]User, error) {
+	query := `SELECT telegram_id, username, days_trained, is_active, failed_at FROM users WHERE is_active = true`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.TelegramID, &u.Username, &u.DaysTrained, &u.IsActive, &u.FailedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+
+	return users, rows.Err()
+}
