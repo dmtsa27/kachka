@@ -2,7 +2,7 @@ package storage
 
 import (
 	"context"
-	"time"
+	"database/sql"
 )
 
 type User struct {
@@ -10,7 +10,7 @@ type User struct {
 	Username    string
 	DaysTrained int
 	IsActive    bool
-	FailedAt    time.Time
+	FailedAt    sql.NullTime
 }
 
 func (s *Storage) CreateUser(ctx context.Context, user User) error {
