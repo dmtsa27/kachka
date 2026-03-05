@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -12,6 +13,8 @@ import (
 )
 
 func main() {
+
+	ctx := context.Background()
 
 	if err := godotenv.Overload(); err != nil {
 		log.Println("No .env file found, using system variables")
@@ -25,7 +28,7 @@ func main() {
 		log.Fatal("DSN empty")
 	}
 
-	mystorage, err := storage.NewPostgresDB(dsn)
+	mystorage, err := storage.NewPostgresDB(ctx, dsn)
 	if err != nil {
 		log.Fatalf("Failed to connect to storage (PostgreSQL):  %v", err)
 	}

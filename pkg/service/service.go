@@ -8,27 +8,38 @@ import (
 	"github.com/dmtsa27/kachka.git/pkg/storage"
 )
 
-type Repository interface {
-	// users
+type UserRepository interface {
 	CreateUser(ctx context.Context, user storage.User) error
 	ReadUser(ctx context.Context, telegramID int64) (storage.User, error)
 	GetAllActiveUsers(ctx context.Context) ([]storage.User, error)
 	DeactivateUser(ctx context.Context, telegramID int64) error
+}
 
-	// sessions
+type SessionRepository interface {
 	HasTrainedToday(ctx context.Context, userID int64) (bool, error)
 	StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error
 	GetSession(ctx context.Context, userID int64) (storage.Session, error)
 	AddLatestSession(ctx context.Context, userID int64) error
 	DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error
+}
 
-	// workouts
+type WorkoutRepository interface {
 	HasWorkoutToday(ctx context.Context, userID int64) (bool, error)
 	CreateWorkout(ctx context.Context, workout storage.Workout) error
 	WeeklyWorkouts(ctx context.Context, userID int64) (int, error)
+}
 
-	// challenge
+type ChallengeRepository interface {
 	GetActiveChallenge(ctx context.Context) (storage.Challenge, error)
+}
+
+// Repositories is a combined interface used by the constructor.
+// The concrete storage struct implements all four interfaces.
+type Repositories interface {
+	UserRepository
+	SessionRepository
+	WorkoutRepository
+	ChallengeRepository
 }
 
 const (
@@ -37,16 +48,24 @@ const (
 )
 
 type Service struct {
-	storage Repository
+	users     UserRepository
+	sessions  SessionRepository
+	workouts  WorkoutRepository
+	challenge ChallengeRepository
 }
 
-func New(s Repository) *Service {
-	return &Service{storage: s}
+func New(r Repositories) *Service {
+	return &Service{
+		users:     r,
+		sessions:  r,
+		workouts:  r,
+		challenge: r,
+	}
 }
 
 // Called when user reacts with target emoji
 func (s *Service) RegisterUser(ctx context.Context, telegramID int64, username string) error {
-	return s.storage.CreateUser(ctx, storage.User{
+	return s.users.CreateUser(ctx, storage.User{
 		TelegramID: telegramID,
 		Username:   username,
 		IsActive:   true,
@@ -55,22 +74,19 @@ func (s *Service) RegisterUser(ctx context.Context, telegramID int64, username s
 
 // Called on every circle video message
 func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, chatID int64, messageID int) error {
-	// 1. Circle must be longer than 50 seconds
 	if duration < MinCircleDuration {
 		return nil
 	}
 
-	// 2. User must be registered (reacted with emoji)
-	user, err := s.storage.ReadUser(ctx, userID)
+	active, err := s.isActiveUser(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("user not found: %w", err)
+		return err
 	}
-	if !user.IsActive {
+	if !active {
 		return nil
 	}
 
-	// 3. Already has a completed workout today? Skip
-	hasWorkout, err := s.storage.HasWorkoutToday(ctx, userID)
+	hasWorkout, err := s.workouts.HasWorkoutToday(ctx, userID)
 	if err != nil {
 		return err
 	}
@@ -78,60 +94,71 @@ func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, 
 		return nil
 	}
 
-	// 4. First circle today? Start a session
-	hasSession, err := s.storage.HasTrainedToday(ctx, userID)
+	return s.processSession(ctx, userID, chatID, messageID)
+}
+
+func (s *Service) isActiveUser(ctx context.Context, userID int64) (bool, error) {
+	user, err := s.users.ReadUser(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("user not found: %w", err)
+	}
+	return user.IsActive, nil
+}
+
+func (s *Service) processSession(ctx context.Context, userID int64, chatID int64, messageID int) error {
+	hasSession, err := s.sessions.HasTrainedToday(ctx, userID)
 	if err != nil {
 		return err
 	}
 	if !hasSession {
-		return s.storage.StartSession(ctx, userID, chatID, messageID)
+		return s.sessions.StartSession(ctx, userID, chatID, messageID)
 	}
 
-	// 5. Session exists — check time gap between first and last circle
-	session, err := s.storage.GetSession(ctx, userID)
+	session, err := s.sessions.GetSession(ctx, userID)
 	if err != nil {
 		return err
 	}
 
-	if session.Last_video_at.Sub(session.Started_at) >= SessionGapMinutes*time.Minute {
-		// 20+ min gap between first and last circle — completed workout!
-		err = s.storage.CreateWorkout(ctx, storage.Workout{
+	if s.isWorkoutComplete(session) {
+		if err = s.workouts.CreateWorkout(ctx, storage.Workout{
 			UserID:      userID,
 			WorkoutDate: time.Now(),
-		})
-		if err != nil {
+		}); err != nil {
 			return err
 		}
 	}
 
-	// Always update last_video_at
-	return s.storage.AddLatestSession(ctx, userID)
+	return s.sessions.AddLatestSession(ctx, userID)
+}
+
+func (s *Service) isWorkoutComplete(session storage.Session) bool {
+	return session.Last_video_at.Sub(session.Started_at) >= SessionGapMinutes*time.Minute
 }
 
 func (s *Service) CancelSession(ctx context.Context, chatID int64, messageID int) error {
-	return s.storage.DeleteSessionToday(ctx, chatID, messageID)
+	return s.sessions.DeleteSessionToday(ctx, chatID, messageID)
 }
 
 // Called every Monday — returns users who failed the weekly goal
 func (s *Service) WeeklyCheck(ctx context.Context) ([]storage.User, error) {
-	challenge, err := s.storage.GetActiveChallenge(ctx)
+	challenge, err := s.challenge.GetActiveChallenge(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("no active challenge: %w", err)
 	}
 
-	users, err := s.storage.GetAllActiveUsers(ctx)
+	users, err := s.users.GetAllActiveUsers(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	var failed []storage.User
 	for _, user := range users {
-		count, err := s.storage.WeeklyWorkouts(ctx, user.TelegramID)
+		count, err := s.workouts.WeeklyWorkouts(ctx, user.TelegramID)
 		if err != nil {
 			return nil, err
 		}
 		if count < challenge.DaysPerWeek {
-			if err := s.storage.DeactivateUser(ctx, user.TelegramID); err != nil {
+			if err := s.users.DeactivateUser(ctx, user.TelegramID); err != nil {
 				return nil, err
 			}
 			failed = append(failed, user)
