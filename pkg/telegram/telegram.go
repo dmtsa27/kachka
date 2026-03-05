@@ -37,7 +37,7 @@ func Start(ctx context.Context, bot *Bot) error {
 	}
 
 	bh, err := th.NewBotHandler(bot.client, updates)
-
+	
 	if err != nil {
 		return err
 	}

@@ -8,16 +8,39 @@ import (
 	"github.com/dmtsa27/kachka.git/pkg/storage"
 )
 
+type Repository interface {
+	// users
+	CreateUser(ctx context.Context, user storage.User) error
+	ReadUser(ctx context.Context, telegramID int64) (storage.User, error)
+	GetAllActiveUsers(ctx context.Context) ([]storage.User, error)
+	DeactivateUser(ctx context.Context, telegramID int64) error
+
+	// sessions
+	HasTrainedToday(ctx context.Context, userID int64) (bool, error)
+	StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error
+	GetSession(ctx context.Context, userID int64) (storage.Session, error)
+	AddLatestSession(ctx context.Context, userID int64) error
+	DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error
+
+	// workouts
+	HasWorkoutToday(ctx context.Context, userID int64) (bool, error)
+	CreateWorkout(ctx context.Context, workout storage.Workout) error
+	WeeklyWorkouts(ctx context.Context, userID int64) (int, error)
+
+	// challenge
+	GetActiveChallenge(ctx context.Context) (storage.Challenge, error)
+}
+
 const (
 	MinCircleDuration = 30 // seconds
 	SessionGapMinutes = 20 // minutes between circles to count as workout
 )
 
 type Service struct {
-	storage *storage.Storage
+	storage Repository
 }
 
-func New(s *storage.Storage) *Service {
+func New(s Repository) *Service {
 	return &Service{storage: s}
 }
 
