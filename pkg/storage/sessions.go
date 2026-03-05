@@ -6,12 +6,12 @@ import (
 )
 
 type Session struct {
-	Id            int
-	User_id       int64
-	ChatID        int64
-	MessageID     int
-	Started_at    time.Time
-	Last_video_at time.Time
+	ID         int
+	UserID     int64
+	ChatID     int64
+	MessageID  int
+	StartedAt  time.Time
+	LastVideoAt time.Time
 }
 
 func (s *Storage) HasTrainedToday(ctx context.Context, userID int64) (bool, error) {
@@ -32,8 +32,8 @@ func (s *Storage) HasTrainedToday(ctx context.Context, userID int64) (bool, erro
 }
 
 func (s *Storage) StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error {
-	query := `INSERT INTO sessions (user_id, chat_id, message_id, started_at, session_date)
-	VALUES ($1, $2, $3, NOW(), CURRENT_DATE)`
+	query := `INSERT INTO sessions (user_id, chat_id, message_id, started_at, last_video_at, session_date)
+	VALUES ($1, $2, $3, NOW(), NOW(), CURRENT_DATE)`
 	_, err := s.db.ExecContext(ctx, query, userID, chatID, messageID)
 	return err
 }
@@ -55,10 +55,10 @@ func (s *Storage) GetSession(ctx context.Context, userID int64) (*Session, error
 	          WHERE user_id = $1 AND session_date = CURRENT_DATE`
 
 	err := s.db.QueryRowContext(ctx, query, userID).Scan(
-		&session.Id,
-		&session.User_id,
-		&session.Started_at,
-		&session.Last_video_at,
+		&session.ID,
+		&session.UserID,
+		&session.StartedAt,
+		&session.LastVideoAt,
 	)
 	if err != nil {
 		return nil, err

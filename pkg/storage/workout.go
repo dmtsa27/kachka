@@ -21,16 +21,17 @@ func (s *Storage) CreateWorkout(ctx context.Context, workout Workout) error {
 	return err
 }
 
-func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64) (int, error) {
+func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error) {
 	query := `
         SELECT COUNT(*) 
         FROM workouts 
         WHERE user_id = $1 
-          AND workout_date >= NOW() - INTERVAL '7 days'`
+          AND workout_date >= $2
+          AND workout_date < $2 + INTERVAL '7 days'`
 
 	var count int
 
-	err := s.db.QueryRowContext(ctx, query, userID).Scan(&count)
+	err := s.db.QueryRowContext(ctx, query, userID, weekStart).Scan(&count)
 
 	if err != nil {
 		return 0, err
