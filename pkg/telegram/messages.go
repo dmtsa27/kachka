@@ -41,7 +41,10 @@ const (
 Для участі лайкніть (❤️) це повідомлення`
 
 	// MsgChallengeStarted відправляється після рестарту челенджу.
-	MsgChallengeStarted = "🚀"
+	MsgChallengeStarted = "✅"
+
+	// MsgWorkoutCancelled відправляється коли валідний 👎 скасовує зарахований воркаут/старт.
+	MsgWorkoutCancelled = "❌"
 
 	// MsgRestartInfo відправляється у відповідь на /restart.
 	MsgRestartInfo = "♻️ Для перезапуску додайте мене в нову групу, а цю видаліть."

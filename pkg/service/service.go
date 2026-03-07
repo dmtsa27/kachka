@@ -38,6 +38,20 @@ type WorkoutRepository interface {
 	WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error)
 }
 
+type BootstrapRepository interface {
+	InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error
+	GetChallengeBootstrap(ctx context.Context, chatID int64) (*storage.ChallengeBootstrap, error)
+	SetBotAdminStatus(ctx context.Context, chatID int64, isBotAdmin bool) error
+	UpsertChatMember(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error
+	SetUserMessageReactions(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error
+	CountWelcomeHeartReactions(ctx context.Context, chatID int64) (int, error)
+	MarkChallengeStarted(ctx context.Context, chatID int64) (bool, error)
+}
+
+type ModerationRepository interface {
+	CancelCountedByMessage(ctx context.Context, chatID int64, messageID int) (bool, error)
+}
+
 type ChallengeRepository interface {
 	GetActiveChallenge(ctx context.Context) (*storage.Challenge, error)
 	CreateChallenge(ctx context.Context, challenge storage.Challenge) error
@@ -49,6 +63,8 @@ type Repositories interface {
 	SessionRepository
 	WorkoutRepository
 	ChallengeRepository
+	BootstrapRepository
+	ModerationRepository
 }
 
 // Notifier відповідає за відправку повідомлень в чат.
@@ -67,6 +83,8 @@ type Service struct {
 	sessions  SessionRepository
 	workouts  WorkoutRepository
 	challenge ChallengeRepository
+	bootstrap BootstrapRepository
+	moderate  ModerationRepository
 	notifier  Notifier
 }
 
@@ -76,6 +94,8 @@ func New(r Repositories, n Notifier) *Service {
 		sessions:  r,
 		workouts:  r,
 		challenge: r,
+		bootstrap: r,
+		moderate:  r,
 		notifier:  n,
 	}
 }
@@ -152,6 +172,8 @@ func (s *Service) processSession(ctx context.Context, userID int64, chatID int64
 		if err = s.workouts.CreateWorkout(ctx, storage.Workout{
 			UserID:      userID,
 			WorkoutDate: time.Now(),
+			ChatID:      chatID,
+			MessageID:   messageID,
 		}); err != nil {
 			return err
 		}
@@ -246,4 +268,112 @@ func (s *Service) WeeklyCheck(ctx context.Context) ([]UserInfo, error) {
 // вирішуючи проблему циклічної залежності при ініціалізації.
 func (s *Service) SetNotifier(n Notifier) {
 	s.notifier = n
+}
+
+func (s *Service) InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+	return s.bootstrap.InitChallengeBootstrap(ctx, chatID, welcomeMessageID, isBotAdmin, expectedReactions)
+}
+
+func (s *Service) UpsertChatMember(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error {
+	return s.bootstrap.UpsertChatMember(ctx, chatID, userID, isBot, isActive)
+}
+
+func (s *Service) SetBotAdminStatus(ctx context.Context, chatID int64, isBotAdmin bool) error {
+	return s.bootstrap.SetBotAdminStatus(ctx, chatID, isBotAdmin)
+}
+
+func (s *Service) ProcessReactionUpdate(ctx context.Context, chatID int64, messageID int, userID int64, username string, emojis []string, daysPerWeek int, duration int) (challengeStarted bool, workoutCancelled bool, err error) {
+	if err := s.RegisterUser(ctx, userID, username); err != nil {
+		return false, false, err
+	}
+
+	if err := s.UpsertChatMember(ctx, chatID, userID, false, true); err != nil {
+		return false, false, err
+	}
+
+	if err := s.bootstrap.SetUserMessageReactions(ctx, chatID, messageID, userID, emojis); err != nil {
+		return false, false, err
+	}
+
+	if containsEmoji(emojis, "👎") {
+		cancelled, err := s.moderate.CancelCountedByMessage(ctx, chatID, messageID)
+		if err != nil {
+			return false, false, err
+		}
+		workoutCancelled = cancelled
+	}
+
+	bootstrap, err := s.bootstrap.GetChallengeBootstrap(ctx, chatID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, workoutCancelled, nil
+		}
+		return false, workoutCancelled, err
+	}
+
+	if bootstrap.WelcomeMessageID != messageID {
+		return false, workoutCancelled, nil
+	}
+
+	started, err := s.TryStartChallengeIfReady(ctx, chatID, daysPerWeek, duration)
+	if err != nil {
+		return false, workoutCancelled, err
+	}
+
+	return started, workoutCancelled, nil
+}
+
+func (s *Service) TryStartChallengeIfReady(ctx context.Context, chatID int64, daysPerWeek int, duration int) (bool, error) {
+	bootstrap, err := s.bootstrap.GetChallengeBootstrap(ctx, chatID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if bootstrap.IsStarted || !bootstrap.IsBotAdmin {
+		return false, nil
+	}
+
+	if bootstrap.ExpectedReactions <= 0 {
+		return false, nil
+	}
+
+	heartMembers, err := s.bootstrap.CountWelcomeHeartReactions(ctx, chatID)
+	if err != nil {
+		return false, err
+	}
+
+	if heartMembers < bootstrap.ExpectedReactions {
+		return false, nil
+	}
+
+	marked, err := s.bootstrap.MarkChallengeStarted(ctx, chatID)
+	if err != nil {
+		return false, err
+	}
+	if !marked {
+		return false, nil
+	}
+
+	if err := s.challenge.CreateChallenge(ctx, storage.Challenge{
+		ChatID:      chatID,
+		DaysPerWeek: daysPerWeek,
+		Duration:    duration,
+		IsActive:    true,
+	}); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func containsEmoji(emojis []string, target string) bool {
+	for _, emoji := range emojis {
+		if emoji == target {
+			return true
+		}
+	}
+	return false
 }

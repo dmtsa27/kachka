@@ -16,7 +16,10 @@ type User struct {
 func (s *Storage) CreateUser(ctx context.Context, user User) error {
 	query := `INSERT INTO users (telegram_id, username, is_active)
 	VALUES ($1, $2, $3)
-	ON CONFLICT (telegram_id) DO NOTHING
+	ON CONFLICT (telegram_id) DO UPDATE
+	SET username = EXCLUDED.username,
+		is_active = true,
+		failed_at = NULL
 	`
 
 	_, err := s.db.ExecContext(ctx, query, user.TelegramID, user.Username, user.IsActive)

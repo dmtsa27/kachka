@@ -36,7 +36,6 @@ func main() {
 
 	log.Println("Connected to DB")
 
-
 	bot, err := telegram.New(token, nil)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)

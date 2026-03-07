@@ -13,8 +13,12 @@ import (
 
 type BotService interface {
 	RegisterUser(ctx context.Context, telegramID int64, username string) error
+	UpsertChatMember(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error
 	HandleCircle(ctx context.Context, userID int64, duration int, chatID int64, messageID int) error
-	StartChallenge(ctx context.Context, chatID int64, daysPerWeek int, duration int) error
+	InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error
+	SetBotAdminStatus(ctx context.Context, chatID int64, isBotAdmin bool) error
+	ProcessReactionUpdate(ctx context.Context, chatID int64, messageID int, userID int64, username string, emojis []string, daysPerWeek int, duration int) (challengeStarted bool, workoutCancelled bool, err error)
+	TryStartChallengeIfReady(ctx context.Context, chatID int64, daysPerWeek int, duration int) (bool, error)
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
 	WeeklyCheck(ctx context.Context) ([]service.UserInfo, error)
 	ActiveChallengeInfo(ctx context.Context) (chatID int64, nextCheck time.Time, err error)
@@ -50,7 +54,18 @@ func New(token string, svc BotService) (*Bot, error) {
 }
 
 func (bot *Bot) Start(ctx context.Context) error {
-	updates, err := bot.client.UpdatesViaLongPolling(ctx, nil)
+	if err := bot.client.DeleteWebhook(ctx, &telego.DeleteWebhookParams{}); err != nil {
+		log.Printf("DeleteWebhook warning: %v", err)
+	}
+
+	updates, err := bot.client.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
+		AllowedUpdates: []string{
+			"message",
+			"message_reaction",
+			"my_chat_member",
+			"chat_member",
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -63,6 +78,15 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// VideoNote (circle) messages → try to count as workout
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		if message.From != nil {
+			if err := bot.service.RegisterUser(ctx, message.From.ID, message.From.Username); err != nil {
+				log.Printf("RegisterUser error (user=%d): %v", message.From.ID, err)
+			}
+			if err := bot.service.UpsertChatMember(ctx, message.Chat.ID, message.From.ID, message.From.IsBot, true); err != nil {
+				log.Printf("UpsertChatMember error (chat=%d user=%d): %v", message.Chat.ID, message.From.ID, err)
+			}
+		}
+
 		if message.VideoNote == nil || message.From == nil {
 			return nil
 		}
@@ -78,7 +102,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 		return nil
 	}, th.AnyMessage())
 
-	// Reactions → register user
+	// Reactions: register/update user, sync reactions, start challenge on all ❤️, cancel counted workout on 👎.
 	bh.HandleMessageReaction(func(ctx *th.Context, reaction telego.MessageReactionUpdated) error {
 		if reaction.User == nil {
 			return nil
@@ -86,36 +110,111 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 		userID := reaction.User.ID
 		username := reaction.User.Username
+		emojis := extractEmojiReactions(reaction.NewReaction)
 
-		if err := bot.service.RegisterUser(ctx, userID, username); err != nil {
-			log.Printf("RegisterUser error (user=%d): %v", userID, err)
+		started, cancelled, err := bot.service.ProcessReactionUpdate(ctx, reaction.Chat.ID, reaction.MessageID, userID, username, emojis, 3, 180)
+		if err != nil {
+			log.Printf("ProcessReactionUpdate error (chat=%d user=%d msg=%d): %v", reaction.Chat.ID, userID, reaction.MessageID, err)
+			return nil
+		}
+
+		if started {
+			if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+				ChatID: telego.ChatID{ID: reaction.Chat.ID},
+				Text:   MsgChallengeStarted,
+			}); err != nil {
+				log.Printf("SendMessage challenge started error (chat=%d): %v", reaction.Chat.ID, err)
+			}
+		}
+
+		if cancelled {
+			if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+				ChatID: telego.ChatID{ID: reaction.Chat.ID},
+				Text:   MsgWorkoutCancelled,
+			}); err != nil {
+				log.Printf("SendMessage workout cancelled error (chat=%d): %v", reaction.Chat.ID, err)
+			}
 		}
 		return nil
 	})
 
-	// Bot доданий в групу → привітальне повідомлення + старт челенджу.
+	// Track chat members to freeze roster at welcome moment.
+	bh.HandleChatMemberUpdated(func(ctx *th.Context, update telego.ChatMemberUpdated) error {
+		member := update.NewChatMember.MemberUser()
+		active := isMemberActive(update.NewChatMember.MemberStatus())
+
+		if err := bot.service.UpsertChatMember(ctx, update.Chat.ID, member.ID, member.IsBot, active); err != nil {
+			log.Printf("UpsertChatMember update error (chat=%d user=%d): %v", update.Chat.ID, member.ID, err)
+		}
+		return nil
+	})
+
+	// Bot доданий в групу → привітальне повідомлення + bootstrap челенджу.
 	// Бот кікнутий/чат видалений → деактивуємо челендж.
 	bh.HandleMyChatMemberUpdated(func(ctx *th.Context, update telego.ChatMemberUpdated) error {
 		oldStatus := update.OldChatMember.MemberStatus()
 		newStatus := update.NewChatMember.MemberStatus()
 		chatID := update.Chat.ID
 
-		isJoining := (oldStatus == telego.MemberStatusLeft || oldStatus == telego.MemberStatusBanned) &&
-			(newStatus == telego.MemberStatusMember || newStatus == telego.MemberStatusAdministrator)
+		isJoining := isMemberInactive(oldStatus) && isMemberActive(newStatus)
 
-		isLeaving := (oldStatus == telego.MemberStatusMember || oldStatus == telego.MemberStatusAdministrator) &&
-			(newStatus == telego.MemberStatusLeft || newStatus == telego.MemberStatusBanned)
+		isLeaving := isMemberActive(oldStatus) && isMemberInactive(newStatus)
+
+		isAdminNow := newStatus == telego.MemberStatusAdministrator || newStatus == telego.MemberStatusCreator
 
 		switch {
 		case isJoining:
-			if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+			welcomeMsg, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
 				ChatID: telego.ChatID{ID: chatID},
 				Text:   MsgWelcome,
-			}); err != nil {
+			})
+			if err != nil {
 				log.Printf("SendMessage welcome error (chat=%d): %v", chatID, err)
+				return nil
 			}
-			if err := bot.service.StartChallenge(ctx, chatID, 3, 180); err != nil {
-				log.Printf("StartChallenge error (chat=%d): %v", chatID, err)
+
+			expectedReactions := 1
+			memberCount, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{
+				ChatID: telego.ChatID{ID: chatID},
+			})
+			if err != nil {
+				log.Printf("GetChatMemberCount warning (chat=%d): %v", chatID, err)
+			} else if memberCount != nil {
+				expectedReactions = *memberCount - 1
+				if expectedReactions < 1 {
+					expectedReactions = 1
+				}
+			}
+
+			if err := bot.service.InitChallengeBootstrap(ctx, chatID, welcomeMsg.MessageID, isAdminNow, expectedReactions); err != nil {
+				log.Printf("InitChallengeBootstrap error (chat=%d): %v", chatID, err)
+			}
+
+			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID, 3, 180); err != nil {
+				log.Printf("TryStartChallengeIfReady error (chat=%d): %v", chatID, err)
+			} else if started {
+				if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+					ChatID: telego.ChatID{ID: chatID},
+					Text:   MsgChallengeStarted,
+				}); err != nil {
+					log.Printf("SendMessage challenge started error (chat=%d): %v", chatID, err)
+				}
+			}
+
+		case !isLeaving && isMemberActive(newStatus):
+			if err := bot.service.SetBotAdminStatus(ctx, chatID, isAdminNow); err != nil {
+				log.Printf("SetBotAdminStatus error (chat=%d): %v", chatID, err)
+			}
+
+			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID, 3, 180); err != nil {
+				log.Printf("TryStartChallengeIfReady error (chat=%d): %v", chatID, err)
+			} else if started {
+				if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+					ChatID: telego.ChatID{ID: chatID},
+					Text:   MsgChallengeStarted,
+				}); err != nil {
+					log.Printf("SendMessage challenge started error (chat=%d): %v", chatID, err)
+				}
 			}
 
 		case isLeaving:
@@ -144,6 +243,29 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	bh.Start()
 	return nil
+}
+
+func isMemberActive(status string) bool {
+	return status == telego.MemberStatusMember ||
+		status == telego.MemberStatusAdministrator ||
+		status == telego.MemberStatusRestricted ||
+		status == telego.MemberStatusCreator
+}
+
+func isMemberInactive(status string) bool {
+	return status == telego.MemberStatusLeft || status == telego.MemberStatusBanned
+}
+
+func extractEmojiReactions(reactions []telego.ReactionType) []string {
+	emojis := make([]string, 0, len(reactions))
+	for _, reaction := range reactions {
+		emoji, ok := reaction.(*telego.ReactionTypeEmoji)
+		if !ok {
+			continue
+		}
+		emojis = append(emojis, emoji.Emoji)
+	}
+	return emojis
 }
 
 // runWeeklyScheduler чекає до спливу поточного тижня челенджу,

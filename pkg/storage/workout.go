@@ -9,14 +9,16 @@ type Workout struct {
 	WorkoutDate time.Time
 	ID          int
 	UserID      int64
+	ChatID      int64
+	MessageID   int
 }
 
 func (s *Storage) CreateWorkout(ctx context.Context, workout Workout) error {
-	query := `INSERT INTO workouts (user_id, workout_date)
-	VALUES ($1, $2)
+	query := `INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
+	VALUES ($1, $2, $3, $4)
 	
 	`
-	_, err := s.db.ExecContext(ctx, query, workout.UserID, workout.WorkoutDate)
+	_, err := s.db.ExecContext(ctx, query, workout.UserID, workout.WorkoutDate, workout.ChatID, workout.MessageID)
 
 	return err
 }
@@ -65,4 +67,22 @@ func (s *Storage) RemoveWorkout(ctx context.Context, workoutID int) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Storage) DeleteWorkoutByMessageToday(ctx context.Context, chatID int64, messageID int) (bool, error) {
+	query := `
+		DELETE FROM workouts
+		WHERE chat_id = $1 AND completion_message_id = $2 AND CAST(workout_date AS DATE) = CURRENT_DATE
+	`
+	result, err := s.db.ExecContext(ctx, query, chatID, messageID)
+	if err != nil {
+		return false, err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rows > 0, nil
 }

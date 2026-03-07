@@ -6,11 +6,11 @@ import (
 )
 
 type Session struct {
-	ID         int
-	UserID     int64
-	ChatID     int64
-	MessageID  int
-	StartedAt  time.Time
+	ID          int
+	UserID      int64
+	ChatID      int64
+	MessageID   int
+	StartedAt   time.Time
 	LastVideoAt time.Time
 }
 
@@ -71,4 +71,19 @@ func (s *Storage) DeleteSessionToday(ctx context.Context, chatID int64, messageI
 	query := `DELETE FROM sessions WHERE chat_id = $1 AND message_id = $2 AND session_date = CURRENT_DATE`
 	_, err := s.db.ExecContext(ctx, query, chatID, messageID)
 	return err
+}
+
+func (s *Storage) DeleteSessionTodayAffected(ctx context.Context, chatID int64, messageID int) (bool, error) {
+	query := `DELETE FROM sessions WHERE chat_id = $1 AND message_id = $2 AND session_date = CURRENT_DATE`
+	result, err := s.db.ExecContext(ctx, query, chatID, messageID)
+	if err != nil {
+		return false, err
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+
+	return rows > 0, nil
 }
