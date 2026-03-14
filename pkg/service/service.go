@@ -25,15 +25,15 @@ type UserRepository interface {
 }
 
 type SessionRepository interface {
-	HasTrainedToday(ctx context.Context, userID int64) (bool, error)
+	HasTrainedToday(ctx context.Context, userID int64, chatID int64) (bool, error)
 	StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error
-	GetSession(ctx context.Context, userID int64) (*storage.Session, error)
-	AddLatestSession(ctx context.Context, userID int64) error
+	GetSession(ctx context.Context, userID int64, chatID int64) (*storage.Session, error)
+	AddLatestSession(ctx context.Context, userID int64, chatID int64) error
 	DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error
 }
 
 type WorkoutRepository interface {
-	HasWorkoutToday(ctx context.Context, userID int64) (bool, error)
+	HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error)
 	CreateWorkout(ctx context.Context, workout storage.Workout) error
 	WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error)
 }
@@ -54,6 +54,7 @@ type ModerationRepository interface {
 
 type ChallengeRepository interface {
 	GetActiveChallenge(ctx context.Context) (*storage.Challenge, error)
+	HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error)
 	CreateChallenge(ctx context.Context, challenge storage.Challenge) error
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
 }
@@ -113,6 +114,14 @@ func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, 
 		return nil
 	}
 
+	isActiveChat, err := s.isActiveChallengeChat(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	if !isActiveChat {
+		return nil
+	}
+
 	active, err := s.isActiveUser(ctx, userID)
 	if err != nil {
 		return err
@@ -121,7 +130,7 @@ func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, 
 		return nil
 	}
 
-	hasWorkout, err := s.workouts.HasWorkoutToday(ctx, userID)
+	hasWorkout, err := s.workouts.HasWorkoutToday(ctx, userID, chatID)
 	if err != nil {
 		return err
 	}
@@ -130,6 +139,15 @@ func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, 
 	}
 
 	return s.processSession(ctx, userID, chatID, messageID)
+}
+
+func (s *Service) isActiveChallengeChat(ctx context.Context, chatID int64) (bool, error) {
+	isActive, err := s.challenge.HasActiveChallengeInChat(ctx, chatID)
+	if err != nil {
+		return false, fmt.Errorf("check active challenge in chat: %w", err)
+	}
+
+	return isActive, nil
 }
 
 func (s *Service) isActiveUser(ctx context.Context, userID int64) (bool, error) {
@@ -145,7 +163,7 @@ func (s *Service) isActiveUser(ctx context.Context, userID int64) (bool, error) 
 }
 
 func (s *Service) processSession(ctx context.Context, userID int64, chatID int64, messageID int) error {
-	hasSession, err := s.sessions.HasTrainedToday(ctx, userID)
+	hasSession, err := s.sessions.HasTrainedToday(ctx, userID, chatID)
 	if err != nil {
 		return err
 	}
@@ -159,11 +177,11 @@ func (s *Service) processSession(ctx context.Context, userID int64, chatID int64
 		return nil
 	}
 
-	if err = s.sessions.AddLatestSession(ctx, userID); err != nil {
+	if err = s.sessions.AddLatestSession(ctx, userID, chatID); err != nil {
 		return err
 	}
 
-	session, err := s.sessions.GetSession(ctx, userID)
+	session, err := s.sessions.GetSession(ctx, userID, chatID)
 	if err != nil {
 		return err
 	}

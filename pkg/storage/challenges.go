@@ -22,7 +22,7 @@ func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) erro
 	}
 	defer tx.Rollback()
 
-	_, err = tx.ExecContext(ctx, `UPDATE challenges SET is_active = false WHERE is_active = true`)
+	_, err = tx.ExecContext(ctx, `UPDATE challenges SET is_active = false WHERE chat_id = $1 AND is_active = true`, challenge.ChatID)
 	if err != nil {
 		return err
 	}
@@ -40,6 +40,19 @@ func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) erro
 	}
 
 	return tx.Commit()
+}
+
+func (s *Storage) HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM challenges WHERE chat_id = $1 AND is_active = true)`,
+		chatID,
+	).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+
+	return exists, nil
 }
 
 func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge, error) {

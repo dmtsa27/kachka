@@ -14,15 +14,15 @@ type Session struct {
 	LastVideoAt time.Time
 }
 
-func (s *Storage) HasTrainedToday(ctx context.Context, userID int64) (bool, error) {
+func (s *Storage) HasTrainedToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM sessions 
-			WHERE user_id = $1 AND CAST(session_date AS DATE) = CURRENT_DATE
+			WHERE user_id = $1 AND chat_id = $2 AND CAST(session_date AS DATE) = CURRENT_DATE
 		)`
 
 	var exists bool
-	err := s.db.QueryRowContext(ctx, query, userID).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, query, userID, chatID).Scan(&exists)
 
 	if err != nil {
 		return false, err
@@ -38,25 +38,26 @@ func (s *Storage) StartSession(ctx context.Context, userID int64, chatID int64, 
 	return err
 }
 
-func (s *Storage) AddLatestSession(ctx context.Context, userID int64) error {
+func (s *Storage) AddLatestSession(ctx context.Context, userID int64, chatID int64) error {
 	query := `UPDATE sessions
 					SET last_video_at = NOW()
-					WHERE user_id = $1 AND session_date = CURRENT_DATE
+					WHERE user_id = $1 AND chat_id = $2 AND session_date = CURRENT_DATE
 
 	`
-	_, err := s.db.ExecContext(ctx, query, userID)
+	_, err := s.db.ExecContext(ctx, query, userID, chatID)
 	return err
 }
 
-func (s *Storage) GetSession(ctx context.Context, userID int64) (*Session, error) {
+func (s *Storage) GetSession(ctx context.Context, userID int64, chatID int64) (*Session, error) {
 	var session Session
-	query := `SELECT id, user_id, started_at, last_video_at
+	query := `SELECT id, user_id, chat_id, started_at, last_video_at
 	          FROM sessions
-	          WHERE user_id = $1 AND session_date = CURRENT_DATE`
+	          WHERE user_id = $1 AND chat_id = $2 AND session_date = CURRENT_DATE`
 
-	err := s.db.QueryRowContext(ctx, query, userID).Scan(
+	err := s.db.QueryRowContext(ctx, query, userID, chatID).Scan(
 		&session.ID,
 		&session.UserID,
+		&session.ChatID,
 		&session.StartedAt,
 		&session.LastVideoAt,
 	)

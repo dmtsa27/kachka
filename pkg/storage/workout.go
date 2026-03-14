@@ -42,15 +42,15 @@ func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, weekStart ti
 	return count, nil
 }
 
-func (s *Storage) HasWorkoutToday(ctx context.Context, userID int64) (bool, error) {
+func (s *Storage) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM workouts 
-			WHERE user_id = $1 AND CAST(workout_date AS DATE) = CURRENT_DATE
+			WHERE user_id = $1 AND chat_id = $2 AND CAST(workout_date AS DATE) = CURRENT_DATE
 		)`
 
 	var exists bool
-	err := s.db.QueryRowContext(ctx, query, userID).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, query, userID, chatID).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
