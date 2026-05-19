@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -32,13 +33,15 @@ type BotService interface {
 	DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (targetUserID int64, isSession bool, err error)
 	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error
 	InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
-	HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error)
+	InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error)
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 }
 
 type Bot struct {
-	client  *telego.Bot
-	service BotService
+	client    *telego.Bot
+	service   BotService
+	pollChans sync.Map // map[string]chan telego.Poll
 }
 
 type outboxMsg struct {
@@ -75,8 +78,9 @@ func New(token string, svc BotService) (*Bot, error) {
 	}
 
 	return &Bot{
-		client:  bot,
-		service: svc,
+		client:    bot,
+		service:   svc,
+		pollChans: sync.Map{},
 	}, nil
 }
 
@@ -617,7 +621,22 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			u.Message.ReplyToMessage.From.ID == bot.client.ID()
 	})
 
-	// 2. /subtract @username [amount]
+	// 2. Poll updates for reactive /subtract
+	bh.HandlePoll(func(ctx *th.Context, poll telego.Poll) error {
+		if poll.IsClosed {
+			return nil
+		}
+		if ch, ok := bot.pollChans.Load(poll.ID); ok {
+			pollChan := ch.(chan telego.Poll)
+			select {
+			case pollChan <- poll:
+			default:
+			}
+		}
+		return nil
+	})
+
+	// 3. /subtract @username [amount]
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
@@ -625,7 +644,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			return nil
 		}
 
-		targetUsername := fields[1]
+		targetUsername := strings.TrimPrefix(fields[1], "@")
 		amount := 1
 		if len(fields) >= 3 {
 			_, _ = fmt.Sscanf(fields[2], "%d", &amount)
@@ -636,11 +655,21 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			return nil
 		}
 
+		// Calculate expected voters (all active human members)
+		expectedVoters := 1
+		count, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{ChatID: telego.ChatID{ID: message.Chat.ID}})
+		if err == nil && count != nil {
+			expectedVoters = *count - 2 // Exclude bot and the target user
+			if expectedVoters < 1 {
+				expectedVoters = 1
+			}
+		}
+
 		isNotAnonymous := false
 		// Create poll
 		poll, err := bot.client.SendPoll(ctx, &telego.SendPollParams{
 			ChatID:      telego.ChatID{ID: message.Chat.ID},
-			Question:    fmt.Sprintf("Відняти %d тренування у %s?", amount, targetUsername),
+			Question:    fmt.Sprintf("Відняти %d тренування у @%s?", amount, targetUsername),
 			Options:     []telego.InputPollOption{{Text: "Так"}, {Text: "Ні"}},
 			IsAnonymous: &isNotAnonymous,
 			Type:        "regular",
@@ -662,46 +691,222 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			return nil
 		}
 
-		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgSubtractVoteStart, amount, targetUsername, targetUsername))
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgSubtractVoteStart, amount, "@"+targetUsername, "@"+targetUsername))
 
-		// Schedule poll closing after 5 minutes
-		go func(pID string, chatID int64, tUser string, amt int) {
-			time.Sleep(5 * time.Minute)
-			p, err := bot.client.StopPoll(ctx, &telego.StopPollParams{
-				ChatID:    telego.ChatID{ID: chatID},
-				MessageID: poll.MessageID,
-			})
-			if err != nil {
-				log.Printf("failed to stop poll: %v", err)
-				// Even if StopPoll fails (e.g. already stopped), we should try to process the update
-				// But we need the results. For now, log and return.
-				return
-			}
+		// Create channel for poll updates
+		pollChan := make(chan telego.Poll, 5)
+		bot.pollChans.Store(poll.Poll.ID, pollChan)
 
-			totalVoters := p.TotalVoterCount
-			totalYes := 0
-			for _, opt := range p.Options {
-				if opt.Text == "Так" {
-					totalYes = opt.VoterCount
+		// Schedule poll closing
+		go func(pID string, chatID int64, pollMsgID int, tUser string, amt int, expVoters int) {
+			defer bot.pollChans.Delete(pID)
+
+			timer := time.NewTimer(5 * time.Minute)
+			defer timer.Stop()
+
+			success := false
+			var finalPoll *telego.Poll
+
+		loop:
+			for {
+				select {
+				case <-timer.C:
+					break loop
+				case p := <-pollChan:
+					yes, no := 0, 0
+					for _, opt := range p.Options {
+						if opt.Text == "Так" {
+							yes = opt.VoterCount
+						}
+						if opt.Text == "Ні" {
+							no = opt.VoterCount
+						}
+					}
+					if no > 0 {
+						success = false
+						break loop
+					}
+					if yes >= expVoters {
+						success = true
+						break loop
+					}
 				}
 			}
 
-			success, err := bot.service.HandlePollUpdate(ctx, pID, totalVoters, totalYes)
+			// Stop the poll in Telegram
+			p, err := bot.client.StopPoll(context.Background(), &telego.StopPollParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				MessageID: pollMsgID,
+			})
+			if err == nil {
+				finalPoll = p
+			}
+
+			// If StopPoll succeeded and we haven't reached success yet, re-evaluate
+			if finalPoll != nil && !success {
+				yes, no := 0, 0
+				for _, opt := range finalPoll.Options {
+					if opt.Text == "Так" {
+						yes = opt.VoterCount
+					}
+					if opt.Text == "Ні" {
+						no = opt.VoterCount
+					}
+				}
+				if no == 0 && yes >= expVoters {
+					success = true
+				}
+			}
+
+			subtracted, err := bot.service.HandlePollUpdate(context.Background(), pID, success)
 			if err != nil {
 				log.Printf("HandlePollUpdate error: %v", err)
-				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для %s", tUser))
+				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для @%s", tUser))
 				return
 			}
 
 			if success {
-				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractSuccess, tUser, amt))
+				if subtracted > 0 {
+					_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf(MsgSubtractSuccess, tUser, subtracted))
+				} else {
+					_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf(MsgSubtractZero, tUser))
+				}
 			} else {
-				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractFailed, tUser))
+				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf(MsgSubtractFailed, tUser))
 			}
-		}(poll.Poll.ID, message.Chat.ID, targetUsername, amount)
+		}(poll.Poll.ID, message.Chat.ID, poll.MessageID, targetUsername, amount, expectedVoters)
 
 		return nil
 	}, func(ctx context.Context, u telego.Update) bool {
 		return th.CommandEqual("subtract")(ctx, u) || th.CommandEqual("substract")(ctx, u)
 	})
+
+	// 4. /add @username [amount]
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		fields := strings.Fields(message.Text)
+		if len(fields) < 2 {
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Використовуйте: /add @username [кількість]")
+			return nil
+		}
+
+		targetUsername := strings.TrimPrefix(fields[1], "@")
+		amount := 1
+		if len(fields) >= 3 {
+			_, _ = fmt.Sscanf(fields[2], "%d", &amount)
+		}
+
+		if amount < 1 {
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Кількість має бути більше 0")
+			return nil
+		}
+
+		// Calculate expected voters (all active human members minus the target user and the bot)
+		expectedVoters := 1
+		count, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{ChatID: telego.ChatID{ID: message.Chat.ID}})
+		if err == nil && count != nil {
+			expectedVoters = *count - 2
+			if expectedVoters < 1 {
+				expectedVoters = 1
+			}
+		}
+
+		isNotAnonymous := false
+		poll, err := bot.client.SendPoll(ctx, &telego.SendPollParams{
+			ChatID:      telego.ChatID{ID: message.Chat.ID},
+			Question:    fmt.Sprintf("Додати %d тренування для @%s?", amount, targetUsername),
+			Options:     []telego.InputPollOption{{Text: "Так"}, {Text: "Ні"}},
+			IsAnonymous: &isNotAnonymous,
+			Type:        "regular",
+		})
+		if err != nil {
+			log.Printf("failed to send poll: %v", err)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Не вдалося створити опитування.")
+			return nil
+		}
+
+		err = bot.service.InitiateAdd(ctx, message.Chat.ID, message.From.ID, targetUsername, amount, poll.Poll.ID)
+		if err != nil {
+			log.Printf("failed to initiate add: %v", err)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("❌ Помилка: %s", err.Error()))
+			return nil
+		}
+
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgAddVoteStart, amount, "@"+targetUsername))
+
+		pollChan := make(chan telego.Poll, 5)
+		bot.pollChans.Store(poll.Poll.ID, pollChan)
+
+		go func(pID string, chatID int64, pollMsgID int, tUser string, amt int, expVoters int) {
+			defer bot.pollChans.Delete(pID)
+			timer := time.NewTimer(5 * time.Minute)
+			defer timer.Stop()
+
+			success := false
+			var finalPoll *telego.Poll
+
+		loop:
+			for {
+				select {
+				case <-timer.C:
+					break loop
+				case p := <-pollChan:
+					yes, no := 0, 0
+					for _, opt := range p.Options {
+						if opt.Text == "Так" {
+							yes = opt.VoterCount
+						}
+						if opt.Text == "Ні" {
+							no = opt.VoterCount
+						}
+					}
+					if no > 0 {
+						success = false
+						break loop
+					}
+					if yes >= expVoters {
+						success = true
+						break loop
+					}
+				}
+			}
+
+			p, err := bot.client.StopPoll(context.Background(), &telego.StopPollParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				MessageID: pollMsgID,
+			})
+			if err == nil {
+				finalPoll = p
+			}
+
+			if finalPoll != nil && !success {
+				yes, no := 0, 0
+				for _, opt := range finalPoll.Options {
+					if opt.Text == "Так" {
+						yes = opt.VoterCount
+					}
+					if opt.Text == "Ні" {
+						no = opt.VoterCount
+					}
+				}
+				if no == 0 && yes >= expVoters {
+					success = true
+				}
+			}
+
+			added, err := bot.service.HandlePollUpdate(context.Background(), pID, success)
+			if err != nil {
+				log.Printf("HandlePollUpdate error: %v", err)
+				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для @%s", tUser))
+				return
+			}
+
+			if success {
+				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf(MsgAddSuccess, tUser, added))
+			} else {
+				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf(MsgAddFailed, tUser))
+			}
+		}(poll.Poll.ID, message.Chat.ID, poll.MessageID, targetUsername, amount, expectedVoters)
+
+		return nil
+	}, th.CommandEqual("add"))
 }

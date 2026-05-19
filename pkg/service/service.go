@@ -46,7 +46,8 @@ type WorkoutRepository interface {
 	CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (targetUserID int64, err error)
 	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
-	SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) error
+	SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
+	AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
 }
 
 type VoteRepository interface {
@@ -157,7 +158,8 @@ type ModerationUseCase interface {
 	DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (targetUserID int64, isSession bool, err error)
 	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error
 	InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
-	HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error)
+	InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error)
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 }
 
@@ -237,8 +239,12 @@ func (s *Service) InitiateSubtract(ctx context.Context, chatID int64, initiatorI
 	return s.Moderation.InitiateSubtract(ctx, chatID, initiatorID, targetUsername, amount, pollID)
 }
 
-func (s *Service) HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error) {
-	return s.Moderation.HandlePollUpdate(ctx, pollID, totalVoters, totalYes)
+func (s *Service) InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	return s.Moderation.InitiateAdd(ctx, chatID, initiatorID, targetUsername, amount, pollID)
+}
+
+func (s *Service) HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error) {
+	return s.Moderation.HandlePollUpdate(ctx, pollID, success)
 }
 
 func (s *Service) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {

@@ -35,7 +35,7 @@ type Workout struct {
 	CancelledAt *time.Time
 }
 
-// Vote represents a poll-based subtraction process.
+// Vote represents a poll-based subtraction/addition process.
 type Vote struct {
 	ID           int
 	ChatID       int64
@@ -43,6 +43,7 @@ type Vote struct {
 	InitiatorID  int64
 	PollID       string
 	Amount       int
+	Type         string // "subtract" or "add"
 	CreatedAt    time.Time
 	ExpiresAt    time.Time
 	IsCompleted  bool

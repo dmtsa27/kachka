@@ -111,8 +111,23 @@ func (s *Storage) GetWorkoutByMessage(ctx context.Context, chatID int64, message
 	return &w, nil
 }
 
-func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) error {
-	_, err := s.db.ExecContext(ctx, `
+func (s *Storage) AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+	// To "add" a workout, we create new workout records for the current date.
+	count := 0
+	for i := 0; i < amount; i++ {
+		query := `INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
+		VALUES ($1, NOW(), $2, 0)`
+		_, err := s.db.ExecContext(ctx, query, userID, chatID)
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+	res, err := s.db.ExecContext(ctx, `
 		UPDATE workouts 
 		SET is_cancelled = true, cancelled_by = 0, cancelled_at = NOW()
 		WHERE id IN (
@@ -123,5 +138,9 @@ func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int
 		)`,
 		userID, chatID, amount,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	return int(affected), err
 }

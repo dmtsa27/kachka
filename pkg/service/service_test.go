@@ -113,7 +113,8 @@ type fakeWorkouts struct {
 	cancelWorkout    func(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error)
 	reinstateWorkout func(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
 	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
-	subtractWorkouts func(ctx context.Context, userID int64, chatID int64, amount int) error
+	subtractWorkouts func(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
+	addWorkouts      func(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
 }
 
 func (f *fakeWorkouts) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
@@ -165,11 +166,18 @@ func (f *fakeWorkouts) GetWorkoutByMessage(ctx context.Context, chatID int64, me
 	return f.getWorkoutByMsg(ctx, chatID, messageID)
 }
 
-func (f *fakeWorkouts) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) error {
+func (f *fakeWorkouts) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
 	if f.subtractWorkouts == nil {
-		return fmt.Errorf("unexpected SubtractWorkouts")
+		return 0, fmt.Errorf("unexpected SubtractWorkouts")
 	}
 	return f.subtractWorkouts(ctx, userID, chatID, amount)
+}
+
+func (f *fakeWorkouts) AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+	if f.addWorkouts == nil {
+		return 0, fmt.Errorf("unexpected AddWorkouts")
+	}
+	return f.addWorkouts(ctx, userID, chatID, amount)
 }
 
 type fakeChallenges struct {
@@ -291,7 +299,13 @@ func (f *fakeBootstrap) UpdateChallengeBootstrapConfig(ctx context.Context, chat
 }
 
 type fakeModeration struct {
-	cancelCounted func(ctx context.Context, chatID int64, messageID int) (bool, error)
+	cancelCounted    func(ctx context.Context, chatID int64, messageID int) (bool, error)
+	disputeWorkout   func(ctx context.Context, chatID int64, messageID int, disputerID int64) (int64, bool, error)
+	reinstateWorkout func(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error
+	initiateSubtract func(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	initiateAdd      func(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	handlePollUpdate func(ctx context.Context, pollID string, success bool) (int, error)
+	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 }
 
 func (f *fakeModeration) CancelCountedByMessage(ctx context.Context, chatID int64, messageID int) (bool, error) {
@@ -299,6 +313,48 @@ func (f *fakeModeration) CancelCountedByMessage(ctx context.Context, chatID int6
 		return false, fmt.Errorf("unexpected CancelCountedByMessage")
 	}
 	return f.cancelCounted(ctx, chatID, messageID)
+}
+
+func (f *fakeModeration) DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (int64, bool, error) {
+	if f.disputeWorkout == nil {
+		return 0, false, fmt.Errorf("unexpected DisputeWorkout")
+	}
+	return f.disputeWorkout(ctx, chatID, messageID, disputerID)
+}
+
+func (f *fakeModeration) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error {
+	if f.reinstateWorkout == nil {
+		return fmt.Errorf("unexpected ReinstateWorkout")
+	}
+	return f.reinstateWorkout(ctx, chatID, messageID, reinstaterID)
+}
+
+func (f *fakeModeration) InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	if f.initiateSubtract == nil {
+		return fmt.Errorf("unexpected InitiateSubtract")
+	}
+	return f.initiateSubtract(ctx, chatID, initiatorID, targetUsername, amount, pollID)
+}
+
+func (f *fakeModeration) InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	if f.initiateAdd == nil {
+		return fmt.Errorf("unexpected InitiateAdd")
+	}
+	return f.initiateAdd(ctx, chatID, initiatorID, targetUsername, amount, pollID)
+}
+
+func (f *fakeModeration) HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error) {
+	if f.handlePollUpdate == nil {
+		return 0, fmt.Errorf("unexpected HandlePollUpdate")
+	}
+	return f.handlePollUpdate(ctx, pollID, success)
+}
+
+func (f *fakeModeration) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+	if f.getWorkoutByMsg == nil {
+		return nil, fmt.Errorf("unexpected GetWorkoutByMessage")
+	}
+	return f.getWorkoutByMsg(ctx, chatID, messageID)
 }
 
 type fakeVotes struct {

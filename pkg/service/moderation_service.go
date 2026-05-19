@@ -98,6 +98,7 @@ func (m *moderationService) InitiateSubtract(ctx context.Context, chatID int64, 
 		InitiatorID:  initiatorID,
 		PollID:       pollID,
 		Amount:       amount,
+		Type:         "subtract",
 		CreatedAt:    time.Now(),
 		ExpiresAt:    time.Now().Add(VoteWindow),
 	}
@@ -105,30 +106,48 @@ func (m *moderationService) InitiateSubtract(ctx context.Context, chatID int64, 
 	return m.votes.CreateVote(ctx, vote)
 }
 
-func (m *moderationService) HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error) {
+func (m *moderationService) InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	targetUserID, err := m.users.GetUserIDByUsername(ctx, targetUsername)
+	if err != nil {
+		return err
+	}
+
+	vote := domain.Vote{
+		ChatID:       chatID,
+		TargetUserID: targetUserID,
+		InitiatorID:  initiatorID,
+		PollID:       pollID,
+		Amount:       amount,
+		Type:         "add",
+		CreatedAt:    time.Now(),
+		ExpiresAt:    time.Now().Add(VoteWindow),
+	}
+
+	return m.votes.CreateVote(ctx, vote)
+}
+
+func (m *moderationService) HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error) {
 	vote, err := m.votes.GetVoteByPollID(ctx, pollID)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 
 	if vote.IsCompleted {
-		return false, nil
+		return 0, nil
 	}
 
-	// Unanimous requirement: all voters must say YES.
-	success := totalVoters > 0 && totalYes == totalVoters
-
 	if err := m.votes.CompleteVote(ctx, pollID, success); err != nil {
-		return false, err
+		return 0, err
 	}
 
 	if success {
-		if err := m.workouts.SubtractWorkouts(ctx, vote.TargetUserID, vote.ChatID, vote.Amount); err != nil {
-			return false, err
+		if vote.Type == "add" {
+			return m.workouts.AddWorkouts(ctx, vote.TargetUserID, vote.ChatID, vote.Amount)
 		}
+		return m.workouts.SubtractWorkouts(ctx, vote.TargetUserID, vote.ChatID, vote.Amount)
 	}
 
-	return success, nil
+	return 0, nil
 }
 
 func (m *moderationService) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
