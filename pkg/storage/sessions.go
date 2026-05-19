@@ -1,18 +1,6 @@
 package storage
 
-import (
-	"context"
-	"time"
-)
-
-type Session struct {
-	ID          int
-	UserID      int64
-	ChatID      int64
-	MessageID   int
-	StartedAt   time.Time
-	LastVideoAt time.Time
-}
+import "context"
 
 func (s *Storage) HasTrainedToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
 	query := `

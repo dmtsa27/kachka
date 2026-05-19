@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/dmtsa27/kachka.git/pkg/domain"
 	"github.com/dmtsa27/kachka.git/pkg/service"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -17,16 +19,25 @@ type BotService interface {
 	HandleCircle(ctx context.Context, userID int64, duration int, chatID int64, messageID int) error
 	InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error
 	SetBotAdminStatus(ctx context.Context, chatID int64, isBotAdmin bool) error
-	ProcessReactionUpdate(ctx context.Context, chatID int64, messageID int, userID int64, username string, emojis []string, daysPerWeek int, duration int) (challengeStarted bool, workoutCancelled bool, err error)
-	TryStartChallengeIfReady(ctx context.Context, chatID int64, daysPerWeek int, duration int) (bool, error)
+	ProcessReactionUpdate(ctx context.Context, chatID int64, messageID int, userID int64, username string, emojis []string) (challengeStarted bool, workoutCancelled bool, err error)
+	TryStartChallengeIfReady(ctx context.Context, chatID int64) (bool, error)
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
-	WeeklyCheck(ctx context.Context) ([]service.UserInfo, error)
-	ActiveChallengeInfo(ctx context.Context) (chatID int64, nextCheck time.Time, err error)
+	WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]service.UserInfo, error)
+	ActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
+	UpdateChallengeConfig(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error
+	GetChallengeConfig(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error)
+	GetRules() service.Rules
 }
 
 type Bot struct {
 	client  *telego.Bot
 	service BotService
+	outbox  chan outboxMsg
+}
+
+type outboxMsg struct {
+	chatID int64
+	text   string
 }
 
 func (bot *Bot) SetService(svc BotService) {
@@ -34,11 +45,13 @@ func (bot *Bot) SetService(svc BotService) {
 }
 
 func (bot *Bot) SendMessage(ctx context.Context, chatID int64, text string) error {
-	_, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Text:   text,
-	})
-	return err
+	select {
+	case bot.outbox <- outboxMsg{chatID: chatID, text: text}:
+		return nil
+	default:
+		log.Printf("outbox full, dropping message to %d: %s", chatID, text)
+		return nil
+	}
 }
 
 func New(token string, svc BotService) (*Bot, error) {
@@ -50,10 +63,31 @@ func New(token string, svc BotService) (*Bot, error) {
 	return &Bot{
 		client:  bot,
 		service: svc,
+		outbox:  make(chan outboxMsg, 100),
 	}, nil
 }
 
+func (bot *Bot) messageWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-bot.outbox:
+			_, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+				ChatID: telego.ChatID{ID: msg.chatID},
+				Text:   msg.text,
+			})
+			if err != nil {
+				log.Printf("failed to send async message to %d: %v", msg.chatID, err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+}
+
 func (bot *Bot) Start(ctx context.Context) error {
+	go bot.messageWorker(ctx)
+
 	if err := bot.client.DeleteWebhook(ctx, &telego.DeleteWebhookParams{}); err != nil {
 		log.Printf("DeleteWebhook warning: %v", err)
 	}
@@ -64,6 +98,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 			"message_reaction",
 			"my_chat_member",
 			"chat_member",
+			"callback_query",
 		},
 	})
 	if err != nil {
@@ -75,6 +110,201 @@ func (bot *Bot) Start(ctx context.Context) error {
 		return err
 	}
 	defer bh.Stop()
+
+	// /restart → інформація як перезапустити
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		_ = bot.SendMessage(ctx, message.Chat.ID, MsgRestartInfo)
+		return nil
+	}, th.CommandEqual("restart"))
+
+	// /days [число]
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		fields := strings.Fields(message.Text)
+		if len(fields) < 2 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть кількість днів, наприклад: /days 3")
+			return nil
+		}
+		var val int
+		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 || val > 7 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число від 1 до 7")
+			return nil
+		}
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		config.DaysPerWeek = val
+		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
+			return err
+		}
+		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено %d тренування на тиждень. Перевірте /settings", val))
+		return nil
+	}, th.CommandEqual("days"))
+
+	// /duration [число]
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		fields := strings.Fields(message.Text)
+		if len(fields) < 2 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть тривалість, наприклад: /duration 180")
+			return nil
+		}
+		var val int
+		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть додатнє число")
+			return nil
+		}
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		config.DurationDays = val
+		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
+			return err
+		}
+		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено тривалість %d днів. Перевірте /settings", val))
+		return nil
+	}, th.CommandEqual("duration"))
+
+	// /penalty [число]
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		fields := strings.Fields(message.Text)
+		if len(fields) < 2 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть суму штрафу, наприклад: /penalty 500")
+			return nil
+		}
+		var val int
+		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 0 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число >= 0")
+			return nil
+		}
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		config.Price = val
+		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
+			return err
+		}
+		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено штраф %d грн. Перевірте /settings", val))
+		return nil
+	}, th.CommandEqual("penalty"))
+
+	// /settings → налаштування челенджу
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		chatID := message.Chat.ID
+		config, err := bot.service.GetChallengeConfig(ctx, chatID)
+		if err != nil {
+			log.Printf("GetChallengeConfig error: %v", err)
+			return nil
+		}
+
+		keyboard := telego.InlineKeyboardMarkup{
+			InlineKeyboard: [][]telego.InlineKeyboardButton{
+				{
+					{Text: "✅ Підтвердити налаштування", CallbackData: "confirm_config"},
+				},
+			},
+		}
+
+		_, err = bot.client.SendMessage(ctx, &telego.SendMessageParams{
+			ChatID:      telego.ChatID{ID: chatID},
+			Text:        fmt.Sprintf(MsgSettings, config.DaysPerWeek, config.DurationDays, config.Price),
+			ReplyMarkup: &keyboard,
+		})
+		return err
+	}, th.CommandEqual("settings"))
+
+	// Callback queries for settings
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+		chatID := query.Message.GetChat().ID
+		config, err := bot.service.GetChallengeConfig(ctx, chatID)
+		if err != nil {
+			return err
+		}
+
+		if query.Data == "confirm_config" {
+			// Verify bot is admin before proceeding
+			member, err := bot.client.GetChatMember(ctx, &telego.GetChatMemberParams{
+				ChatID: telego.ChatID{ID: chatID},
+				UserID: bot.client.ID(),
+			})
+			isAdmin := false
+			if err == nil && member != nil {
+				status := member.MemberStatus()
+				isAdmin = status == telego.MemberStatusAdministrator || status == telego.MemberStatusCreator
+			}
+
+			if !isAdmin {
+				return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+					CallbackQueryID: query.ID,
+					Text:            "❌ Будь ласка, зробіть бота адміністратором, щоб він міг бачити реакції!",
+					ShowAlert:       true,
+				})
+			}
+
+			// Send official rules with variables
+			rules := bot.service.GetRules()
+			sessionGapMin := int(rules.SessionGap.Minutes())
+			minCircleSec := rules.MinCircleDurationSeconds
+
+			rulesText := fmt.Sprintf(MsgWelcome,
+				config.DurationDays, config.Price, config.DurationDays,
+				config.DaysPerWeek, config.DaysPerWeek,
+				sessionGapMin, minCircleSec,
+				config.DaysPerWeek, config.DaysPerWeek, config.Price,
+				config.DurationDays,
+			)
+
+			welcomeMsg, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+				ChatID: telego.ChatID{ID: chatID},
+				Text:   rulesText,
+			})
+			if err != nil {
+				log.Printf("confirm_config SendMessage error: %v", err)
+				return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+					CallbackQueryID: query.ID,
+					Text:            "❌ Помилка при надсиланні правил. Перевірте дозволи бота.",
+					ShowAlert:       true,
+				})
+			}
+
+			expectedReactions := 1
+			memberCount, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{
+				ChatID: telego.ChatID{ID: chatID},
+			})
+			if err == nil && memberCount != nil {
+				expectedReactions = *memberCount - 1
+				if expectedReactions < 1 {
+					expectedReactions = 1
+				}
+			}
+
+			// Update bootstrap with welcome message ID, set as admin, and freeze roster
+			if err := bot.service.InitChallengeBootstrap(ctx, chatID, welcomeMsg.MessageID, true, expectedReactions); err != nil {
+				log.Printf("confirm_config InitChallengeBootstrap error: %v", err)
+				return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+					CallbackQueryID: query.ID,
+					Text:            "❌ Помилка збереження налаштувань.",
+					ShowAlert:       true,
+				})
+			}
+
+			// Remove the confirm button to prevent double-clicks
+			_, _ = bot.client.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				MessageID: query.Message.GetMessageID(),
+			})
+
+			return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+				CallbackQueryID: query.ID,
+				Text:            "✅ Налаштування підтверджено! Чекаємо на ❤️",
+			})
+		}
+
+		return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+			CallbackQueryID: query.ID,
+		})
+	})
 
 	// VideoNote (circle) messages → try to count as workout
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
@@ -112,28 +342,18 @@ func (bot *Bot) Start(ctx context.Context) error {
 		username := reaction.User.Username
 		emojis := extractEmojiReactions(reaction.NewReaction)
 
-		started, cancelled, err := bot.service.ProcessReactionUpdate(ctx, reaction.Chat.ID, reaction.MessageID, userID, username, emojis, 3, 180)
+		started, cancelled, err := bot.service.ProcessReactionUpdate(ctx, reaction.Chat.ID, reaction.MessageID, userID, username, emojis)
 		if err != nil {
 			log.Printf("ProcessReactionUpdate error (chat=%d user=%d msg=%d): %v", reaction.Chat.ID, userID, reaction.MessageID, err)
 			return nil
 		}
 
 		if started {
-			if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-				ChatID: telego.ChatID{ID: reaction.Chat.ID},
-				Text:   MsgChallengeStarted,
-			}); err != nil {
-				log.Printf("SendMessage challenge started error (chat=%d): %v", reaction.Chat.ID, err)
-			}
+			_ = bot.SendMessage(ctx, reaction.Chat.ID, MsgChallengeStarted)
 		}
 
 		if cancelled {
-			if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-				ChatID: telego.ChatID{ID: reaction.Chat.ID},
-				Text:   MsgWorkoutCancelled,
-			}); err != nil {
-				log.Printf("SendMessage workout cancelled error (chat=%d): %v", reaction.Chat.ID, err)
-			}
+			_ = bot.SendMessage(ctx, reaction.Chat.ID, MsgWorkoutCancelled)
 		}
 		return nil
 	})
@@ -164,41 +384,17 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 		switch {
 		case isJoining:
-			welcomeMsg, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-				ChatID: telego.ChatID{ID: chatID},
-				Text:   MsgWelcome,
+			_, _ = bot.client.SendSticker(ctx, &telego.SendStickerParams{
+				ChatID:  telego.ChatID{ID: chatID},
+				Sticker: telego.InputFile{FileID: DuckStickerFileID},
 			})
-			if err != nil {
-				log.Printf("SendMessage welcome error (chat=%d): %v", chatID, err)
-				return nil
-			}
-
-			expectedReactions := 1
-			memberCount, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{
+			_, _ = bot.client.SendMessage(ctx, &telego.SendMessageParams{
 				ChatID: telego.ChatID{ID: chatID},
+				Text:   MsgOnboarding,
 			})
-			if err != nil {
-				log.Printf("GetChatMemberCount warning (chat=%d): %v", chatID, err)
-			} else if memberCount != nil {
-				expectedReactions = *memberCount - 1
-				if expectedReactions < 1 {
-					expectedReactions = 1
-				}
-			}
 
-			if err := bot.service.InitChallengeBootstrap(ctx, chatID, welcomeMsg.MessageID, isAdminNow, expectedReactions); err != nil {
+			if err := bot.service.InitChallengeBootstrap(ctx, chatID, 0, isAdminNow, 1); err != nil {
 				log.Printf("InitChallengeBootstrap error (chat=%d): %v", chatID, err)
-			}
-
-			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID, 3, 180); err != nil {
-				log.Printf("TryStartChallengeIfReady error (chat=%d): %v", chatID, err)
-			} else if started {
-				if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-					ChatID: telego.ChatID{ID: chatID},
-					Text:   MsgChallengeStarted,
-				}); err != nil {
-					log.Printf("SendMessage challenge started error (chat=%d): %v", chatID, err)
-				}
 			}
 
 		case !isLeaving && isMemberActive(newStatus):
@@ -206,15 +402,10 @@ func (bot *Bot) Start(ctx context.Context) error {
 				log.Printf("SetBotAdminStatus error (chat=%d): %v", chatID, err)
 			}
 
-			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID, 3, 180); err != nil {
+			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID); err != nil {
 				log.Printf("TryStartChallengeIfReady error (chat=%d): %v", chatID, err)
 			} else if started {
-				if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-					ChatID: telego.ChatID{ID: chatID},
-					Text:   MsgChallengeStarted,
-				}); err != nil {
-					log.Printf("SendMessage challenge started error (chat=%d): %v", chatID, err)
-				}
+				_ = bot.SendMessage(ctx, chatID, MsgChallengeStarted)
 			}
 
 		case isLeaving:
@@ -225,18 +416,6 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 		return nil
 	})
-
-	// /restart → інформація як перезапустити
-	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
-		_, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID: telego.ChatID{ID: message.Chat.ID},
-			Text:   MsgRestartInfo,
-		})
-		if err != nil {
-			log.Printf("SendMessage restart info error (chat=%d): %v", message.Chat.ID, err)
-		}
-		return nil
-	}, th.CommandEqual("restart"))
 
 	// Щотижневий шедулер: чекає до кінця поточного тижня, запускає перевірку і нотифікує чат
 	go bot.runWeeklyScheduler(ctx)
@@ -268,36 +447,39 @@ func extractEmojiReactions(reactions []telego.ReactionType) []string {
 	return emojis
 }
 
-// runWeeklyScheduler чекає до спливу поточного тижня челенджу,
-// запускає WeeklyCheck, відправляє результат в чат і повторює цикл.
+// runWeeklyScheduler iterates over all active challenges, determines the next check time,
+// and runs WeeklyCheck for each when due.
 func (bot *Bot) runWeeklyScheduler(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
 	for {
-		chatID, nextCheck, err := bot.service.ActiveChallengeInfo(ctx)
+		challenges, err := bot.service.ActiveChallenges(ctx)
 		if err != nil {
-			log.Printf("scheduler: no active challenge, retry in 1h: %v", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(1 * time.Hour):
-				continue
+			log.Printf("scheduler: failed to fetch active challenges: %v", err)
+		} else {
+			for _, ch := range challenges {
+				elapsed := time.Since(ch.StartedAt)
+				weekNumber := int(elapsed / (7 * 24 * time.Hour))
+				nextCheck := ch.StartedAt.Add(time.Duration(weekNumber+1) * 7 * 24 * time.Hour)
+
+				if time.Now().After(nextCheck) {
+					log.Printf("scheduler: running weekly check for chat %d", ch.ChatID)
+					failed, err := bot.service.WeeklyCheck(ctx, ch)
+					if err != nil {
+						log.Printf("WeeklyCheck error (chat=%d): %v", ch.ChatID, err)
+						continue
+					}
+					bot.notifyWeeklyResult(ctx, ch.ChatID, failed)
+				}
 			}
 		}
-
-		log.Printf("scheduler: next weekly check at %s", nextCheck.Format(time.RFC3339))
 
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(time.Until(nextCheck)):
+		case <-ticker.C:
 		}
-
-		failed, err := bot.service.WeeklyCheck(ctx)
-		if err != nil {
-			log.Printf("WeeklyCheck error: %v", err)
-			continue
-		}
-
-		bot.notifyWeeklyResult(ctx, chatID, failed)
 	}
 }
 
@@ -313,10 +495,5 @@ func (bot *Bot) notifyWeeklyResult(ctx context.Context, chatID int64, failed []s
 		text = fmt.Sprintf(MsgWeeklyFailed, mentions)
 	}
 
-	if _, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Text:   text,
-	}); err != nil {
-		log.Printf("notifyWeeklyResult error: %v", err)
-	}
+	_ = bot.SendMessage(ctx, chatID, text)
 }

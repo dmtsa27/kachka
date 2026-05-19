@@ -3,17 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
-	"time"
 )
-
-type Challenge struct {
-	ChallengeID int
-	IsActive    bool
-	DaysPerWeek int
-	Duration    int
-	StartedAt   time.Time
-	ChatID      int64
-}
 
 func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -28,12 +18,13 @@ func (s *Storage) CreateChallenge(ctx context.Context, challenge Challenge) erro
 	}
 
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO challenges (chat_id, days_per_week, challenge_duration, is_active, started_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		`INSERT INTO challenges (chat_id, days_per_week, challenge_duration, is_active, price, started_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())`,
 		challenge.ChatID,
 		challenge.DaysPerWeek,
 		challenge.Duration,
 		challenge.IsActive,
+		challenge.Price,
 	)
 	if err != nil {
 		return err
@@ -57,7 +48,7 @@ func (s *Storage) HasActiveChallengeInChat(ctx context.Context, chatID int64) (b
 
 func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge, error) {
 	var challenge Challenge
-	query := `SELECT id, days_per_week, challenge_duration, is_active
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price
               FROM challenges
               WHERE id = $1`
 
@@ -66,6 +57,7 @@ func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge
 		&challenge.DaysPerWeek,
 		&challenge.Duration,
 		&challenge.IsActive,
+		&challenge.Price,
 	)
 
 	if err != nil {
@@ -77,12 +69,13 @@ func (s *Storage) GetChallenge(ctx context.Context, challengeID int) (*Challenge
 
 func (s *Storage) UpdateChallenge(ctx context.Context, challenge Challenge) error {
 	query := `UPDATE challenges
-              SET challenge_duration = $1, is_active = $2
-              WHERE id = $3`
+              SET challenge_duration = $1, is_active = $2, price = $3
+              WHERE id = $4`
 
 	_, err := s.db.ExecContext(ctx, query,
 		challenge.Duration,
 		challenge.IsActive,
+		challenge.Price,
 		challenge.ChallengeID,
 	)
 
@@ -91,7 +84,7 @@ func (s *Storage) UpdateChallenge(ctx context.Context, challenge Challenge) erro
 
 func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 	var challenge Challenge
-	query := `SELECT id, days_per_week, challenge_duration, is_active, started_at, chat_id
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
               FROM challenges WHERE is_active = true LIMIT 1`
 
 	err := s.db.QueryRowContext(ctx, query).Scan(
@@ -99,6 +92,7 @@ func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 		&challenge.DaysPerWeek,
 		&challenge.Duration,
 		&challenge.IsActive,
+		&challenge.Price,
 		&challenge.StartedAt,
 		&challenge.ChatID,
 	)
@@ -107,6 +101,37 @@ func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 	}
 
 	return &challenge, nil
+}
+
+func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, error) {
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
+              FROM challenges WHERE is_active = true`
+
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var challenges []Challenge
+	for rows.Next() {
+		var challenge Challenge
+		err := rows.Scan(
+			&challenge.ChallengeID,
+			&challenge.DaysPerWeek,
+			&challenge.Duration,
+			&challenge.IsActive,
+			&challenge.Price,
+			&challenge.StartedAt,
+			&challenge.ChatID,
+		)
+		if err != nil {
+			return nil, err
+		}
+		challenges = append(challenges, challenge)
+	}
+
+	return challenges, rows.Err()
 }
 
 // DeactivateChallengeForChat деактивує активний челендж для конкретного чату.

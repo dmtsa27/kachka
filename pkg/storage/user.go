@@ -1,17 +1,6 @@
 package storage
 
-import (
-	"context"
-	"database/sql"
-)
-
-type User struct {
-	TelegramID  int64
-	Username    string
-	DaysTrained int
-	IsActive    bool
-	FailedAt    sql.NullTime
-}
+import "context"
 
 func (s *Storage) CreateUser(ctx context.Context, user User) error {
 	query := `INSERT INTO users (telegram_id, username, is_active)

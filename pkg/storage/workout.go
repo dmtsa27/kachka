@@ -3,15 +3,9 @@ package storage
 import (
 	"context"
 	"time"
-)
 
-type Workout struct {
-	WorkoutDate time.Time
-	ID          int
-	UserID      int64
-	ChatID      int64
-	MessageID   int
-}
+	"github.com/dmtsa27/kachka.git/pkg/service"
+)
 
 func (s *Storage) CreateWorkout(ctx context.Context, workout Workout) error {
 	query := `INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
@@ -40,6 +34,34 @@ func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, weekStart ti
 	}
 
 	return count, nil
+}
+
+func (s *Storage) GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]service.UserWorkouts, error) {
+	query := `
+        SELECT u.telegram_id, u.username, COUNT(w.id) as workout_count
+        FROM users u
+        LEFT JOIN workouts w ON u.telegram_id = w.user_id 
+            AND w.workout_date >= $1 
+            AND w.workout_date < $1 + INTERVAL '7 days'
+        WHERE u.is_active = true
+        GROUP BY u.telegram_id, u.username`
+
+	rows, err := s.db.QueryContext(ctx, query, weekStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var counts []service.UserWorkouts
+	for rows.Next() {
+		var uw service.UserWorkouts
+		if err := rows.Scan(&uw.TelegramID, &uw.Username, &uw.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, uw)
+	}
+
+	return counts, rows.Err()
 }
 
 func (s *Storage) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {

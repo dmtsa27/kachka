@@ -1,25 +1,11 @@
 package storage
 
-import (
-	"context"
-	"database/sql"
-	"time"
-)
-
-type ChallengeBootstrap struct {
-	ChatID            int64
-	WelcomeMessageID  int
-	ExpectedReactions int
-	RosterFrozenAt    time.Time
-	IsStarted         bool
-	StartedAt         sql.NullTime
-	IsBotAdmin        bool
-}
+import "context"
 
 func (s *Storage) InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO challenge_bootstrap (chat_id, welcome_message_id, expected_reactions, roster_frozen_at, is_started, started_at, is_bot_admin)
-		VALUES ($1, $2, $3, NOW(), false, NULL, $4)
+		INSERT INTO challenge_bootstrap (chat_id, welcome_message_id, expected_reactions, roster_frozen_at, is_started, started_at, is_bot_admin, days_per_week, duration_days, price)
+		VALUES ($1, $2, $3, NOW(), false, NULL, $4, 3, 180, 500)
 		ON CONFLICT (chat_id)
 		DO UPDATE SET
 			welcome_message_id = EXCLUDED.welcome_message_id,
@@ -35,7 +21,7 @@ func (s *Storage) InitChallengeBootstrap(ctx context.Context, chatID int64, welc
 func (s *Storage) GetChallengeBootstrap(ctx context.Context, chatID int64) (*ChallengeBootstrap, error) {
 	var state ChallengeBootstrap
 	err := s.db.QueryRowContext(ctx, `
-		SELECT chat_id, welcome_message_id, expected_reactions, roster_frozen_at, is_started, started_at, is_bot_admin
+		SELECT chat_id, welcome_message_id, expected_reactions, roster_frozen_at, is_started, started_at, is_bot_admin, days_per_week, duration_days, price
 		FROM challenge_bootstrap
 		WHERE chat_id = $1
 	`, chatID).Scan(
@@ -46,6 +32,9 @@ func (s *Storage) GetChallengeBootstrap(ctx context.Context, chatID int64) (*Cha
 		&state.IsStarted,
 		&state.StartedAt,
 		&state.IsBotAdmin,
+		&state.DaysPerWeek,
+		&state.DurationDays,
+		&state.Price,
 	)
 	if err != nil {
 		return nil, err
@@ -76,6 +65,15 @@ func (s *Storage) MarkChallengeStarted(ctx context.Context, chatID int64) (bool,
 		return false, err
 	}
 	return rows > 0, nil
+}
+
+func (s *Storage) UpdateChallengeBootstrapConfig(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE challenge_bootstrap
+		SET days_per_week = $2, duration_days = $3, price = $4
+		WHERE chat_id = $1
+	`, chatID, daysPerWeek, durationDays, price)
+	return err
 }
 
 func (s *Storage) UpsertChatMember(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error {

@@ -21,6 +21,10 @@ watchdb:
 
 up:
 	docker compose up -d db
+	@echo "Waiting for database to be ready..."
+	@until docker compose exec db pg_isready -U $(DB_USER) -d $(DB_NAME) > /dev/null 2>&1; do \
+		sleep 1; \
+	done
 	$(MAKE) migrate
 	docker compose up -d --build server
 

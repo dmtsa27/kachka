@@ -41,9 +41,16 @@ func main() {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
 
-	svc := service.New(mystorage, nil)
+	svc := service.New(service.Deps{
+		Users:      mystorage,
+		Sessions:   mystorage,
+		Workouts:   mystorage,
+		Challenge:  mystorage,
+		Bootstrap:  mystorage,
+		Moderation: mystorage,
+		Notifier:   bot,
+	})
 	bot.SetService(svc)
-	svc.SetNotifier(bot)
 
 	if err := bot.Start(ctx); err != nil {
 		log.Fatalf("Bot error: %v", err)
