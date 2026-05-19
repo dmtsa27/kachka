@@ -119,6 +119,15 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// /days [число]
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		if config.IsStarted || config.WelcomeMessageID != 0 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			return nil
+		}
+
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть кількість днів, наприклад: /days 3")
@@ -128,10 +137,6 @@ func (bot *Bot) Start(ctx context.Context) error {
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 || val > 7 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число від 1 до 7")
 			return nil
-		}
-		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
-		if err != nil {
-			return err
 		}
 		config.DaysPerWeek = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
@@ -143,6 +148,15 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// /duration [число]
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		if config.IsStarted || config.WelcomeMessageID != 0 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			return nil
+		}
+
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть тривалість, наприклад: /duration 180")
@@ -152,10 +166,6 @@ func (bot *Bot) Start(ctx context.Context) error {
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть додатнє число")
 			return nil
-		}
-		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
-		if err != nil {
-			return err
 		}
 		config.DurationDays = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
@@ -167,6 +177,15 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// /penalty [число]
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
+		if err != nil {
+			return err
+		}
+		if config.IsStarted || config.WelcomeMessageID != 0 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			return nil
+		}
+
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть суму штрафу, наприклад: /penalty 500")
@@ -176,10 +195,6 @@ func (bot *Bot) Start(ctx context.Context) error {
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 0 {
 			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число >= 0")
 			return nil
-		}
-		config, err := bot.service.GetChallengeConfig(ctx, message.Chat.ID)
-		if err != nil {
-			return err
 		}
 		config.Price = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
@@ -195,22 +210,35 @@ func (bot *Bot) Start(ctx context.Context) error {
 		config, err := bot.service.GetChallengeConfig(ctx, chatID)
 		if err != nil {
 			log.Printf("GetChallengeConfig error: %v", err)
+			_ = bot.SendMessage(ctx, chatID, "❌ Налаштування не знайдені. Спробуйте пізніше або перезапустіть бота.")
 			return nil
 		}
 
-		keyboard := telego.InlineKeyboardMarkup{
-			InlineKeyboard: [][]telego.InlineKeyboardButton{
-				{
-					{Text: "✅ Підтвердити налаштування", CallbackData: "confirm_config"},
+		var text string
+		var keyboard *telego.InlineKeyboardMarkup
+
+		if config.IsStarted || config.WelcomeMessageID != 0 {
+			text = fmt.Sprintf(MsgSettingsLocked, config.DaysPerWeek, config.DurationDays, config.Price)
+		} else {
+			text = fmt.Sprintf(MsgSettings, config.DaysPerWeek, config.DurationDays, config.Price)
+			keyboard = &telego.InlineKeyboardMarkup{
+				InlineKeyboard: [][]telego.InlineKeyboardButton{
+					{
+						{Text: "✅ Підтвердити налаштування", CallbackData: "confirm_config"},
+					},
 				},
-			},
+			}
 		}
 
-		_, err = bot.client.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID:      telego.ChatID{ID: chatID},
-			Text:        fmt.Sprintf(MsgSettings, config.DaysPerWeek, config.DurationDays, config.Price),
-			ReplyMarkup: &keyboard,
-		})
+		params := &telego.SendMessageParams{
+			ChatID: telego.ChatID{ID: chatID},
+			Text:   text,
+		}
+		if keyboard != nil {
+			params.ReplyMarkup = keyboard
+		}
+
+		_, err = bot.client.SendMessage(ctx, params)
 		return err
 	}, th.CommandEqual("settings"))
 
@@ -223,6 +251,13 @@ func (bot *Bot) Start(ctx context.Context) error {
 		}
 
 		if query.Data == "confirm_config" {
+			if config.IsStarted || config.WelcomeMessageID != 0 {
+				return bot.client.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+					CallbackQueryID: query.ID,
+					Text:            MsgConfigLocked,
+					ShowAlert:       true,
+				})
+			}
 			// Verify bot is admin before proceeding
 			member, err := bot.client.GetChatMember(ctx, &telego.GetChatMemberParams{
 				ChatID: telego.ChatID{ID: chatID},

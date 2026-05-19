@@ -116,11 +116,43 @@ func (b *bootstrapService) TryStartChallengeIfReady(ctx context.Context, chatID 
 }
 
 func (b *bootstrapService) UpdateConfig(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+	bootstrap, err := b.bootstrap.GetChallengeBootstrap(ctx, chatID)
+	if err != nil {
+		return err
+	}
+
+	// Lock if challenge is started OR if settings were already confirmed (welcome message sent)
+	if bootstrap.IsStarted || bootstrap.WelcomeMessageID != 0 {
+		return errors.New("cannot change configuration after challenge has started or rules confirmed")
+	}
+
 	return b.bootstrap.UpdateChallengeBootstrapConfig(ctx, chatID, daysPerWeek, durationDays, price)
 }
 
 func (b *bootstrapService) GetConfig(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
-	return b.bootstrap.GetChallengeBootstrap(ctx, chatID)
+	state, err := b.bootstrap.GetChallengeBootstrap(ctx, chatID)
+	if err == nil {
+		return state, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
+	// If bootstrap not found, try to see if there's an active challenge already
+	active, err := b.challenge.GetActiveChallengeByChat(ctx, chatID)
+	if err != nil {
+		return nil, err // Return original error if not found in both
+	}
+
+	// Map Challenge to ChallengeBootstrap for the UI
+	return &domain.ChallengeBootstrap{
+		ChatID:       active.ChatID,
+		IsStarted:    true,
+		DaysPerWeek:  active.DaysPerWeek,
+		DurationDays: active.Duration,
+		Price:        active.Price,
+		StartedAt:    &active.StartedAt,
+	}, nil
 }
 
 func containsEmoji(emojis []string, target string) bool {

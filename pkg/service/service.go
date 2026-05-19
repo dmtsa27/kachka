@@ -60,6 +60,7 @@ type ModerationRepository interface {
 
 type ChallengeRepository interface {
 	GetActiveChallenge(ctx context.Context) (*domain.Challenge, error)
+	GetActiveChallengeByChat(ctx context.Context, chatID int64) (*domain.Challenge, error)
 	GetAllActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
 	HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error)
 	CreateChallenge(ctx context.Context, challenge domain.Challenge) error
@@ -141,6 +142,7 @@ type CircleUseCase interface {
 // UserUseCase defines operations for user management.
 type UserUseCase interface {
 	RegisterUser(ctx context.Context, telegramID int64, username string) error
+	IsActiveUser(ctx context.Context, userID int64) (bool, error)
 }
 
 // Service is a facade that delegates to focused use cases.

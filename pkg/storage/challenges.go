@@ -103,6 +103,27 @@ func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 	return &challenge, nil
 }
 
+func (s *Storage) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*Challenge, error) {
+	var challenge Challenge
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
+              FROM challenges WHERE chat_id = $1 AND is_active = true LIMIT 1`
+
+	err := s.db.QueryRowContext(ctx, query, chatID).Scan(
+		&challenge.ChallengeID,
+		&challenge.DaysPerWeek,
+		&challenge.Duration,
+		&challenge.IsActive,
+		&challenge.Price,
+		&challenge.StartedAt,
+		&challenge.ChatID,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &challenge, nil
+}
+
 func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, error) {
 	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
               FROM challenges WHERE is_active = true`
@@ -134,14 +155,36 @@ func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, erro
 	return challenges, rows.Err()
 }
 
-// DeactivateChallengeForChat деактивує активний челендж для конкретного чату.
+// DeactivateChallengeForChat деактивує активний челендж та очищує дані для конкретного чату.
 // Викликається коли бота кікають або чат видаляється.
 func (s *Storage) DeactivateChallengeForChat(ctx context.Context, chatID int64) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE challenges SET is_active = false WHERE chat_id = $1 AND is_active = true`,
-		chatID,
-	)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Deactivate active challenges
+	if _, err := tx.ExecContext(ctx, `UPDATE challenges SET is_active = false WHERE chat_id = $1`, chatID); err != nil {
+		return err
+	}
+
+	// Delete bootstrap state
+	if _, err := tx.ExecContext(ctx, `DELETE FROM challenge_bootstrap WHERE chat_id = $1`, chatID); err != nil {
+		return err
+	}
+
+	// Delete message reactions
+	if _, err := tx.ExecContext(ctx, `DELETE FROM message_reactions WHERE chat_id = $1`, chatID); err != nil {
+		return err
+	}
+
+	// Delete chat members
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_members WHERE chat_id = $1`, chatID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 func (s *Storage) SetWeekRules(ctx context.Context, challengeID int, days int) error {

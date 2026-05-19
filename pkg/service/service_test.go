@@ -126,6 +126,7 @@ func (f *fakeWorkouts) GetWorkoutCounts(ctx context.Context, weekStart time.Time
 
 type fakeChallenges struct {
 	getActiveChallenge     func(ctx context.Context) (*domain.Challenge, error)
+	getActiveByChat        func(ctx context.Context, chatID int64) (*domain.Challenge, error)
 	getAllActiveChallenges func(ctx context.Context) ([]domain.Challenge, error)
 	hasActiveChallengeChat func(ctx context.Context, chatID int64) (bool, error)
 	createChallenge        func(ctx context.Context, challenge domain.Challenge) error
@@ -137,6 +138,13 @@ func (f *fakeChallenges) GetActiveChallenge(ctx context.Context) (*domain.Challe
 		return nil, fmt.Errorf("unexpected GetActiveChallenge")
 	}
 	return f.getActiveChallenge(ctx)
+}
+
+func (f *fakeChallenges) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*domain.Challenge, error) {
+	if f.getActiveByChat == nil {
+		return nil, fmt.Errorf("unexpected GetActiveChallengeByChat")
+	}
+	return f.getActiveByChat(ctx, chatID)
 }
 
 func (f *fakeChallenges) GetAllActiveChallenges(ctx context.Context) ([]domain.Challenge, error) {
@@ -632,5 +640,275 @@ func TestWeeklyCheck_DeactivatesFailed(t *testing.T) {
 	}
 	if len(failed) != 1 || failed[0].TelegramID != 10 {
 		t.Fatalf("unexpected failed list")
+	}
+}
+
+func TestBootstrapService_Config(t *testing.T) {
+	ctx := context.Background()
+	bootstrap := &fakeBootstrap{
+		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+			return nil
+		},
+		updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+			return nil
+		},
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			return &domain.ChallengeBootstrap{DaysPerWeek: 5}, nil
+		},
+		setBotAdmin: func(ctx context.Context, chatID int64, isBotAdmin bool) error {
+			return nil
+		},
+	}
+
+	svc := New(Deps{
+		Bootstrap: bootstrap,
+	})
+
+	if err := svc.InitChallengeBootstrap(ctx, 1, 2, true, 3); err != nil {
+		t.Errorf("InitChallengeBootstrap error: %v", err)
+	}
+
+	if err := svc.SetBotAdminStatus(ctx, 1, true); err != nil {
+		t.Errorf("SetBotAdminStatus error: %v", err)
+	}
+
+	if err := svc.UpdateChallengeConfig(ctx, 1, 5, 30, 500); err != nil {
+		t.Errorf("UpdateChallengeConfig error: %v", err)
+	}
+
+	config, err := svc.GetChallengeConfig(ctx, 1)
+	if err != nil {
+		t.Errorf("GetChallengeConfig error: %v", err)
+	}
+	if config.DaysPerWeek != 5 {
+		t.Errorf("expected DaysPerWeek 5, got %d", config.DaysPerWeek)
+	}
+}
+
+func TestChallengeService_Management(t *testing.T) {
+	ctx := context.Background()
+	challenges := &fakeChallenges{
+		createChallenge: func(ctx context.Context, challenge domain.Challenge) error {
+			return nil
+		},
+		deactivateForChat: func(ctx context.Context, chatID int64) error {
+			return nil
+		},
+	}
+
+	svc := New(Deps{
+		Challenge: challenges,
+	})
+
+	if err := svc.StartChallenge(ctx, 1, 3, 30); err != nil {
+		t.Errorf("StartChallenge error: %v", err)
+	}
+
+	if err := svc.DeactivateChallengeForChat(ctx, 1); err != nil {
+		t.Errorf("DeactivateChallengeForChat error: %v", err)
+	}
+}
+
+func TestCircleService_Cancel(t *testing.T) {
+	ctx := context.Background()
+	sessions := &fakeSessions{
+		deleteSession: func(ctx context.Context, chatID int64, messageID int) error {
+			return nil
+		},
+	}
+
+	svc := New(Deps{
+		Sessions: sessions,
+	})
+
+	svc.CancelSession(ctx, 1, 2)
+}
+
+func TestUserService_IsActiveUser(t *testing.T) {
+	ctx := context.Background()
+	users := &fakeUsers{
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			if telegramID == 1 {
+				return &domain.User{IsActive: true}, nil
+			}
+			return nil, sql.ErrNoRows
+		},
+	}
+
+	svc := New(Deps{
+		Users: users,
+	})
+
+	active, err := svc.Users.IsActiveUser(ctx, 1)
+	if err != nil || !active {
+		t.Errorf("expected active user 1")
+	}
+
+	active, err = svc.Users.IsActiveUser(ctx, 2)
+	if err != nil || active {
+		t.Errorf("expected inactive user 2")
+	}
+}
+
+func TestProcessReactionUpdate_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	bootstrap := &fakeBootstrap{
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			if chatID == 999 {
+				return nil, sql.ErrNoRows
+			}
+			return &domain.ChallengeBootstrap{WelcomeMessageID: 100}, nil
+		},
+		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+			return nil
+		},
+		upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error {
+			return nil
+		},
+	}
+
+	svc := New(Deps{
+		Users: &fakeUsers{createUser: func(ctx context.Context, user domain.User) error { return nil }},
+		Bootstrap: bootstrap,
+		Moderation: &fakeModeration{cancelCounted: func(ctx context.Context, chatID int64, messageID int) (bool, error) { return false, nil }},
+	})
+
+	// Case 1: Wrong message ID
+	started, cancelled, err := svc.ProcessReactionUpdate(ctx, 1, 200, 3, "u", []string{"❤"})
+	if err != nil || started || cancelled {
+		t.Errorf("expected no action for wrong message ID")
+	}
+
+	// Case 2: Bootstrap not found
+	started, cancelled, err = svc.ProcessReactionUpdate(ctx, 999, 100, 3, "u", []string{"❤"})
+	if err != nil || started || cancelled {
+		t.Errorf("expected no action for missing bootstrap")
+	}
+}
+
+func TestTryStartChallengeIfReady_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	bootstrap := &fakeBootstrap{
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			if chatID == 1 { // Not admin
+				return &domain.ChallengeBootstrap{IsBotAdmin: false}, nil
+			}
+			if chatID == 2 { // Already started
+				return &domain.ChallengeBootstrap{IsBotAdmin: true, IsStarted: true}, nil
+			}
+			if chatID == 3 { // Expected reactions <= 0
+				return &domain.ChallengeBootstrap{IsBotAdmin: true, ExpectedReactions: 0}, nil
+			}
+			if chatID == 4 { // Not enough hearts
+				return &domain.ChallengeBootstrap{IsBotAdmin: true, ExpectedReactions: 5}, nil
+			}
+			return nil, sql.ErrNoRows
+		},
+		countHeartReactions: func(ctx context.Context, chatID int64) (int, error) {
+			return 2, nil
+		},
+	}
+
+	svc := New(Deps{
+		Bootstrap: bootstrap,
+	})
+
+	for i := 1; i <= 4; i++ {
+		started, err := svc.TryStartChallengeIfReady(ctx, int64(i))
+		if err != nil || started {
+			t.Errorf("expected challenge NOT to start for case %d", i)
+		}
+	}
+
+	started, err := svc.TryStartChallengeIfReady(ctx, 999)
+	if err != nil || started {
+		t.Errorf("expected challenge NOT to start for missing bootstrap")
+	}
+}
+
+func TestHandleCircle_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	svc := New(Deps{
+		Challenge: &fakeChallenges{
+			hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) {
+				return chatID == 1, nil
+			},
+		},
+		Users: &fakeUsers{
+			readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+				return &domain.User{IsActive: telegramID == 10}, nil
+			},
+		},
+		Workouts: &fakeWorkouts{
+			hasWorkoutToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) {
+				return userID == 11, nil
+			},
+		},
+		Rules: Rules{MinCircleDurationSeconds: 10},
+	})
+
+	// Case 1: Duration too short
+	if err := svc.HandleCircle(ctx, 10, 5, 1, 1); err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+
+	// Case 2: Inactive chat
+	if err := svc.HandleCircle(ctx, 10, 15, 2, 1); err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+
+	// Case 3: Inactive user
+	if err := svc.HandleCircle(ctx, 99, 15, 1, 1); err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+
+	// Case 4: Already has workout
+	if err := svc.HandleCircle(ctx, 11, 15, 1, 1); err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+}
+
+func TestService_DefaultRules(t *testing.T) {
+	rules := DefaultRules()
+	if rules.MinCircleDurationSeconds != MinCircleDuration {
+		t.Errorf("expected default min duration %d, got %d", MinCircleDuration, rules.MinCircleDurationSeconds)
+	}
+}
+
+func TestService_FacadeDelegation(t *testing.T) {
+	ctx := context.Background()
+	
+	// Testing delegation of methods that were at 0% in service.go
+	svc := New(Deps{
+		Bootstrap: &fakeBootstrap{
+			upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error { return nil },
+		},
+		Challenge: &fakeChallenges{
+			getAllActiveChallenges: func(ctx context.Context) ([]domain.Challenge, error) { return nil, nil },
+		},
+	})
+	
+	_ = svc.UpsertChatMember(ctx, 1, 2, false, true)
+	_, _ = svc.ActiveChallenges(ctx)
+}
+
+func TestBootstrapService_UpdateConfig_Started(t *testing.T) {
+	ctx := context.Background()
+	bootstrap := &fakeBootstrap{
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			return &domain.ChallengeBootstrap{IsStarted: true}, nil
+		},
+	}
+
+	svc := New(Deps{
+		Bootstrap: bootstrap,
+	})
+
+	err := svc.UpdateChallengeConfig(ctx, 1, 5, 30, 500)
+	if err == nil || err.Error() != "cannot change configuration after challenge has started or rules confirmed" {
+		t.Errorf("expected error 'cannot change configuration after challenge has started or rules confirmed', got %v", err)
 	}
 }
