@@ -64,11 +64,15 @@ func (c *circleService) processSession(ctx context.Context, userID int64, chatID
 		return err
 	}
 	if !hasSession {
-		if err := c.sessions.StartSession(ctx, userID, chatID, messageID); err != nil {
-			return err
-		}
+		msgID := messageID
 		if c.notifier != nil {
-			_ = c.notifier.SendMessage(ctx, chatID, "🚀")
+			id, err := c.notifier.SendMessage(ctx, chatID, "🚀")
+			if err == nil {
+				msgID = id
+			}
+		}
+		if err := c.sessions.StartSession(ctx, userID, chatID, msgID); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -83,16 +87,21 @@ func (c *circleService) processSession(ctx context.Context, userID int64, chatID
 	}
 
 	if c.isWorkoutComplete(*session) {
+		msgID := messageID
+		if c.notifier != nil {
+			id, err := c.notifier.SendMessage(ctx, chatID, "🎖")
+			if err == nil {
+				msgID = id
+			}
+		}
+
 		if err = c.workouts.CreateWorkout(ctx, domain.Workout{
 			UserID:      userID,
 			WorkoutDate: time.Now(),
 			ChatID:      chatID,
-			MessageID:   messageID,
+			MessageID:   msgID,
 		}); err != nil {
 			return err
-		}
-		if c.notifier != nil {
-			_ = c.notifier.SendMessage(ctx, chatID, "🎖")
 		}
 	}
 

@@ -55,11 +55,12 @@ func (f *fakeUsers) GetUserIDByUsername(ctx context.Context, username string) (i
 }
 
 type fakeSessions struct {
-	hasTrainedToday  func(ctx context.Context, userID int64, chatID int64) (bool, error)
-	startSession     func(ctx context.Context, userID int64, chatID int64, messageID int) error
-	getSession       func(ctx context.Context, userID int64, chatID int64) (*domain.Session, error)
-	addLatestSession func(ctx context.Context, userID int64, chatID int64) error
-	deleteSession    func(ctx context.Context, chatID int64, messageID int) error
+	hasTrainedToday     func(ctx context.Context, userID int64, chatID int64) (bool, error)
+	startSession        func(ctx context.Context, userID int64, chatID int64, messageID int) error
+	getSession          func(ctx context.Context, userID int64, chatID int64) (*domain.Session, error)
+	getSessionByMessage func(ctx context.Context, chatID int64, messageID int) (*domain.Session, error)
+	addLatestSession    func(ctx context.Context, userID int64, chatID int64) error
+	deleteSession       func(ctx context.Context, chatID int64, messageID int) error
 }
 
 func (f *fakeSessions) HasTrainedToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
@@ -81,6 +82,13 @@ func (f *fakeSessions) GetSession(ctx context.Context, userID int64, chatID int6
 		return nil, fmt.Errorf("unexpected GetSession")
 	}
 	return f.getSession(ctx, userID, chatID)
+}
+
+func (f *fakeSessions) GetSessionByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Session, error) {
+	if f.getSessionByMessage == nil {
+		return nil, fmt.Errorf("unexpected GetSessionByMessage")
+	}
+	return f.getSessionByMessage(ctx, chatID, messageID)
 }
 
 func (f *fakeSessions) AddLatestSession(ctx context.Context, userID int64, chatID int64) error {
@@ -324,10 +332,11 @@ type fakeNotifier struct {
 	messages []string
 }
 
-func (f *fakeNotifier) SendMessage(ctx context.Context, chatID int64, text string) error {
+func (f *fakeNotifier) SendMessage(ctx context.Context, chatID int64, text string) (int, error) {
 	f.messages = append(f.messages, text)
-	return nil
+	return 123, nil // Return a fake message ID
 }
+
 
 func TestHandleCircle_StartsSession(t *testing.T) {
 	ctx := context.Background()

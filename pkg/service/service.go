@@ -82,7 +82,7 @@ type ChallengeRepository interface {
 // Notifier sends bot messages to the chat.
 // Implemented by the telegram package.
 type Notifier interface {
-	SendMessage(ctx context.Context, chatID int64, text string) error
+	SendMessage(ctx context.Context, chatID int64, text string) (int, error)
 }
 
 const (

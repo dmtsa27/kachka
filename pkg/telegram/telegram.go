@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/dmtsa27/kachka.git/pkg/domain"
 	"github.com/dmtsa27/kachka.git/pkg/service"
@@ -38,7 +39,6 @@ type BotService interface {
 type Bot struct {
 	client  *telego.Bot
 	service BotService
-	outbox  chan outboxMsg
 }
 
 type outboxMsg struct {
@@ -50,14 +50,16 @@ func (bot *Bot) SetService(svc BotService) {
 	bot.service = svc
 }
 
-func (bot *Bot) SendMessage(ctx context.Context, chatID int64, text string) error {
-	select {
-	case bot.outbox <- outboxMsg{chatID: chatID, text: text}:
-		return nil
-	default:
-		log.Printf("outbox full, dropping message to %d: %s", chatID, text)
-		return nil
+func (bot *Bot) SendMessage(ctx context.Context, chatID int64, text string) (int, error) {
+	msg, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Text:   text,
+	})
+	if err != nil {
+		log.Printf("failed to send message to %d: %v", chatID, err)
+		return 0, err
 	}
+	return msg.MessageID, nil
 }
 
 func New(token string, svc BotService) (*Bot, error) {
@@ -75,55 +77,10 @@ func New(token string, svc BotService) (*Bot, error) {
 	return &Bot{
 		client:  bot,
 		service: svc,
-		outbox:  make(chan outboxMsg, 100),
 	}, nil
 }
 
-func (bot *Bot) messageWorker(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-bot.outbox:
-			_, err := bot.client.SendMessage(ctx, &telego.SendMessageParams{
-				ChatID: telego.ChatID{ID: msg.chatID},
-				Text:   msg.text,
-			})
-			if err != nil {
-				log.Printf("failed to send async message to %d: %v", msg.chatID, err)
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
-}
-
-func (bot *Bot) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
-	return bot.service.GetUserIDByUsername(ctx, username)
-}
-
-func (bot *Bot) DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (int64, bool, error) {
-	return bot.service.DisputeWorkout(ctx, chatID, messageID, disputerID)
-}
-
-func (bot *Bot) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error {
-	return bot.service.ReinstateWorkout(ctx, chatID, messageID, reinstaterID)
-}
-
-func (bot *Bot) InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
-	return bot.service.InitiateSubtract(ctx, chatID, initiatorID, targetUsername, amount, pollID)
-}
-
-func (bot *Bot) HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error) {
-	return bot.service.HandlePollUpdate(ctx, pollID, totalVoters, totalYes)
-}
-
-func (bot *Bot) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
-	return bot.service.GetWorkoutByMessage(ctx, chatID, messageID)
-}
-
 func (bot *Bot) Start(ctx context.Context) error {
-	go bot.messageWorker(ctx)
-
 	if err := bot.client.DeleteWebhook(ctx, &telego.DeleteWebhookParams{}); err != nil {
 		log.Printf("DeleteWebhook warning: %v", err)
 	}
@@ -165,7 +122,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// /restart → інформація як перезапустити
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
-		_ = bot.SendMessage(ctx, message.Chat.ID, MsgRestartInfo)
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, MsgRestartInfo)
 		return nil
 	}, th.CommandEqual("restart"))
 
@@ -176,25 +133,25 @@ func (bot *Bot) Start(ctx context.Context) error {
 			return err
 		}
 		if config.IsStarted || config.WelcomeMessageID != 0 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
 			return nil
 		}
 
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть кількість днів, наприклад: /days 3")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть кількість днів, наприклад: /days 3")
 			return nil
 		}
 		var val int
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 || val > 7 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число від 1 до 7")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число від 1 до 7")
 			return nil
 		}
 		config.DaysPerWeek = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
 			return err
 		}
-		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено %d тренування на тиждень. Перевірте /settings", val))
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено %d тренування на тиждень. Перевірте /settings", val))
 		return nil
 	}, th.CommandEqual("days"))
 
@@ -205,25 +162,25 @@ func (bot *Bot) Start(ctx context.Context) error {
 			return err
 		}
 		if config.IsStarted || config.WelcomeMessageID != 0 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
 			return nil
 		}
 
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть тривалість, наприклад: /duration 180")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть тривалість, наприклад: /duration 180")
 			return nil
 		}
 		var val int
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 1 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть додатнє число")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть додатнє число")
 			return nil
 		}
 		config.DurationDays = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
 			return err
 		}
-		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено тривалість %d днів. Перевірте /settings", val))
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено тривалість %d днів. Перевірте /settings", val))
 		return nil
 	}, th.CommandEqual("duration"))
 
@@ -234,25 +191,25 @@ func (bot *Bot) Start(ctx context.Context) error {
 			return err
 		}
 		if config.IsStarted || config.WelcomeMessageID != 0 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, MsgConfigLocked)
 			return nil
 		}
 
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть суму штрафу, наприклад: /penalty 500")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть суму штрафу, наприклад: /penalty 500")
 			return nil
 		}
 		var val int
 		if _, err := fmt.Sscanf(fields[1], "%d", &val); err != nil || val < 0 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число >= 0")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Вкажіть число >= 0")
 			return nil
 		}
 		config.Price = val
 		if err := bot.service.UpdateChallengeConfig(ctx, message.Chat.ID, config.DaysPerWeek, config.DurationDays, config.Price); err != nil {
 			return err
 		}
-		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено штраф %d грн. Перевірте /settings", val))
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("✅ Встановлено штраф %d грн. Перевірте /settings", val))
 		return nil
 	}, th.CommandEqual("penalty"))
 
@@ -262,7 +219,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 		config, err := bot.service.GetChallengeConfig(ctx, chatID)
 		if err != nil {
 			log.Printf("GetChallengeConfig error: %v", err)
-			_ = bot.SendMessage(ctx, chatID, "❌ Налаштування не знайдені. Спробуйте пізніше або перезапустіть бота.")
+			_, _ = bot.SendMessage(ctx, chatID, "❌ Налаштування не знайдені. Спробуйте пізніше або перезапустіть бота.")
 			return nil
 		}
 
@@ -425,11 +382,11 @@ func (bot *Bot) Start(ctx context.Context) error {
 		}
 
 		if started {
-			_ = bot.SendMessage(ctx, reaction.Chat.ID, MsgChallengeStarted)
+			_, _ = bot.SendMessage(ctx, reaction.Chat.ID, MsgChallengeStarted)
 		}
 
 		if cancelled {
-			_ = bot.SendMessage(ctx, reaction.Chat.ID, MsgWorkoutCancelled)
+			_, _ = bot.SendMessage(ctx, reaction.Chat.ID, MsgWorkoutCancelled)
 		}
 		return nil
 	})
@@ -481,7 +438,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 			if started, err := bot.service.TryStartChallengeIfReady(ctx, chatID); err != nil {
 				log.Printf("TryStartChallengeIfReady error (chat=%d): %v", chatID, err)
 			} else if started {
-				_ = bot.SendMessage(ctx, chatID, MsgChallengeStarted)
+				_, _ = bot.SendMessage(ctx, chatID, MsgChallengeStarted)
 			}
 
 		case isLeaving:
@@ -524,7 +481,12 @@ func extractEmojiReactions(reactions []telego.ReactionType) []string {
 		if !ok {
 			continue
 		}
-		emojis = append(emojis, emoji.Emoji)
+		// Use only the base emoji to ignore skin tones
+		e := emoji.Emoji
+		if len(e) > 0 {
+			r, _ := utf8.DecodeRuneInString(e)
+			emojis = append(emojis, string(r))
+		}
 	}
 	return emojis
 }
@@ -577,7 +539,7 @@ func (bot *Bot) notifyWeeklyResult(ctx context.Context, chatID int64, failed []s
 		text = fmt.Sprintf(MsgWeeklyFailed, mentions)
 	}
 
-	_ = bot.SendMessage(ctx, chatID, text)
+	_, _ = bot.SendMessage(ctx, chatID, text)
 }
 
 func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
@@ -588,13 +550,20 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 		user := message.From
 
 		text := strings.TrimSpace(message.Text)
-		isDispute := text == EmojiDispute || (message.Sticker != nil && (message.Sticker.FileID == StickerMiddleFinger || message.Sticker.Emoji == EmojiDispute))
-		isReinstate := text == EmojiReinstate || (message.Sticker != nil && (message.Sticker.FileID == StickerThumbsUp || message.Sticker.Emoji == EmojiReinstate))
+		// Extract base emoji for comparison
+		baseEmoji := ""
+		if len(text) > 0 {
+			r, _ := utf8.DecodeRuneInString(text)
+			baseEmoji = string(r)
+		}
+
+		isDispute := baseEmoji == EmojiDispute || (message.Sticker != nil && (message.Sticker.FileID == StickerMiddleFinger || (len(message.Sticker.Emoji) > 0 && string(([]rune(message.Sticker.Emoji))[0]) == EmojiDispute)))
+		isReinstate := baseEmoji == EmojiReinstate || (message.Sticker != nil && (message.Sticker.FileID == StickerThumbsUp || (len(message.Sticker.Emoji) > 0 && string(([]rune(message.Sticker.Emoji))[0]) == EmojiReinstate)))
 
 		if isDispute {
 			targetUserID, isSession, disputeErr := bot.service.DisputeWorkout(ctx.Context(), chatID, messageID, user.ID)
 			if disputeErr != nil {
-				_ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgDisputeError, disputeErr))
+				_, _ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgDisputeError, disputeErr))
 				return nil
 			}
 			// Try to get target username for better message
@@ -608,14 +577,20 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			}
 
 			if isSession {
-				_ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf("🚀 Старт користувача @%s скасовано користувачем @%s.", targetName, user.Username))
+				_, _ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf("🚀 Старт користувача @%s скасовано користувачем @%s.", targetName, user.Username))
 			} else {
-				_ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgDisputeSuccess, targetName, user.Username))
+				_, _ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgDisputeSuccess, targetName, user.Username))
 			}
 		} else if isReinstate {
 			reinstateErr := bot.service.ReinstateWorkout(ctx.Context(), chatID, messageID, user.ID)
 			if reinstateErr != nil {
-				return nil // Silently ignore invalid reinstates
+				// Provide feedback if it's a known error (like time limit)
+				errMsg := reinstateErr.Error()
+				if errMsg == "тренування не знайдено" {
+					return nil // Probably just a random thumbs up
+				}
+				_, _ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf("❌ Помилка повернення: %s", errMsg))
+				return nil
 			}
 
 			// Try to get original target user
@@ -631,7 +606,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 				}
 			}
 
-			_ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgReinstateSuccess, targetName))
+			_, _ = bot.SendMessage(ctx.Context(), chatID, fmt.Sprintf(MsgReinstateSuccess, targetName))
 		}
 
 		return nil
@@ -646,7 +621,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		fields := strings.Fields(message.Text)
 		if len(fields) < 2 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Використовуйте: /subtract @username [кількість]")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Використовуйте: /subtract @username [кількість]")
 			return nil
 		}
 
@@ -657,7 +632,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 		}
 
 		if amount < 1 {
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Кількість має бути більше 0")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Кількість має бути більше 0")
 			return nil
 		}
 
@@ -672,7 +647,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 		})
 		if err != nil {
 			log.Printf("failed to send poll: %v", err)
-			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Не вдалося створити опитування. Перевірте права бота (має бути адміном).")
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Не вдалося створити опитування. Перевірте права бота (має бути адміном).")
 			return nil
 		}
 
@@ -683,11 +658,11 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			if strings.Contains(errMsg, "no rows") {
 				errMsg = "Користувача не знайдено в базі (він має хоча б раз провзаємодіяти з ботом — написати або лайкнути правила)"
 			}
-			_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("❌ Помилка: %s", errMsg))
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("❌ Помилка: %s", errMsg))
 			return nil
 		}
 
-		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgSubtractVoteStart, amount, targetUsername, targetUsername))
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgSubtractVoteStart, amount, targetUsername, targetUsername))
 
 		// Schedule poll closing after 5 minutes
 		go func(pID string, chatID int64, tUser string, amt int) {
@@ -698,6 +673,8 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			})
 			if err != nil {
 				log.Printf("failed to stop poll: %v", err)
+				// Even if StopPoll fails (e.g. already stopped), we should try to process the update
+				// But we need the results. For now, log and return.
 				return
 			}
 
@@ -709,14 +686,22 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 				}
 			}
 
-			success, _ := bot.service.HandlePollUpdate(ctx, pID, totalVoters, totalYes)
+			success, err := bot.service.HandlePollUpdate(ctx, pID, totalVoters, totalYes)
+			if err != nil {
+				log.Printf("HandlePollUpdate error: %v", err)
+				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для %s", tUser))
+				return
+			}
+
 			if success {
-				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractSuccess, tUser, amt))
+				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractSuccess, tUser, amt))
 			} else {
-				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractFailed, tUser))
+				_, _ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractFailed, tUser))
 			}
 		}(poll.Poll.ID, message.Chat.ID, targetUsername, amount)
 
 		return nil
-	}, th.CommandEqual("subtract"), th.CommandEqual("substract"))
+	}, func(ctx context.Context, u telego.Update) bool {
+		return th.CommandEqual("subtract")(ctx, u) || th.CommandEqual("substract")(ctx, u)
+	})
 }
