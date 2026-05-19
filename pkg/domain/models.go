@@ -30,6 +30,23 @@ type Workout struct {
 	UserID      int64
 	ChatID      int64
 	MessageID   int
+	IsCancelled bool
+	CancelledBy *int64
+	CancelledAt *time.Time
+}
+
+// Vote represents a poll-based subtraction process.
+type Vote struct {
+	ID           int
+	ChatID       int64
+	TargetUserID int64
+	InitiatorID  int64
+	PollID       string
+	Amount       int
+	CreatedAt    time.Time
+	ExpiresAt    time.Time
+	IsCompleted  bool
+	IsSuccess    bool
 }
 
 // Challenge is the active challenge context.

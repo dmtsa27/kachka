@@ -27,6 +27,12 @@ type BotService interface {
 	UpdateChallengeConfig(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error
 	GetChallengeConfig(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error)
 	GetRules() service.Rules
+	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
+	DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (targetUserID int64, isSession bool, err error)
+	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error
+	InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error)
+	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 }
 
 type Bot struct {
@@ -85,6 +91,30 @@ func (bot *Bot) messageWorker(ctx context.Context) {
 	}
 }
 
+func (bot *Bot) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	return bot.service.GetUserIDByUsername(ctx, username)
+}
+
+func (bot *Bot) DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (int64, bool, error) {
+	return bot.service.DisputeWorkout(ctx, chatID, messageID, disputerID)
+}
+
+func (bot *Bot) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error {
+	return bot.service.ReinstateWorkout(ctx, chatID, messageID, reinstaterID)
+}
+
+func (bot *Bot) InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	return bot.service.InitiateSubtract(ctx, chatID, initiatorID, targetUsername, amount, pollID)
+}
+
+func (bot *Bot) HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error) {
+	return bot.service.HandlePollUpdate(ctx, pollID, totalVoters, totalYes)
+}
+
+func (bot *Bot) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+	return bot.service.GetWorkoutByMessage(ctx, chatID, messageID)
+}
+
 func (bot *Bot) Start(ctx context.Context) error {
 	go bot.messageWorker(ctx)
 
@@ -99,6 +129,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 			"my_chat_member",
 			"chat_member",
 			"callback_query",
+			"poll",
 		},
 	})
 	if err != nil {
@@ -109,7 +140,22 @@ func (bot *Bot) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer bh.Stop()
+
+	// Middleware: Register/Update user for every message
+	bh.Use(func(ctx *th.Context, update telego.Update) error {
+		if update.Message != nil && update.Message.From != nil {
+			msg := update.Message
+			if err := bot.service.RegisterUser(ctx.Context(), msg.From.ID, msg.From.Username); err != nil {
+				log.Printf("RegisterUser error (user=%d): %v", msg.From.ID, err)
+			}
+			if err := bot.service.UpsertChatMember(ctx.Context(), msg.Chat.ID, msg.From.ID, msg.From.IsBot, true); err != nil {
+				log.Printf("UpsertChatMember error (chat=%d user=%d): %v", msg.Chat.ID, msg.From.ID, err)
+			}
+		}
+		return ctx.Next(update)
+	})
+
+	bot.registerModerationHandlers(bh)
 
 	// /restart → інформація як перезапустити
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
@@ -343,19 +389,6 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// VideoNote (circle) messages → try to count as workout
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
-		if message.From != nil {
-			if err := bot.service.RegisterUser(ctx, message.From.ID, message.From.Username); err != nil {
-				log.Printf("RegisterUser error (user=%d): %v", message.From.ID, err)
-			}
-			if err := bot.service.UpsertChatMember(ctx, message.Chat.ID, message.From.ID, message.From.IsBot, true); err != nil {
-				log.Printf("UpsertChatMember error (chat=%d user=%d): %v", message.Chat.ID, message.From.ID, err)
-			}
-		}
-
-		if message.VideoNote == nil || message.From == nil {
-			return nil
-		}
-
 		userID := message.From.ID
 		duration := message.VideoNote.Duration
 		chatID := message.Chat.ID
@@ -365,7 +398,9 @@ func (bot *Bot) Start(ctx context.Context) error {
 			log.Printf("HandleCircle error (user=%d): %v", userID, err)
 		}
 		return nil
-	}, th.AnyMessage())
+	}, func(ctx context.Context, u telego.Update) bool {
+		return u.Message != nil && u.Message.VideoNote != nil && u.Message.From != nil
+	})
 
 	// Reactions: register/update user, sync reactions, start challenge on all ❤️, cancel counted workout on 👎.
 	bh.HandleMessageReaction(func(ctx *th.Context, reaction telego.MessageReactionUpdated) error {
@@ -455,6 +490,12 @@ func (bot *Bot) Start(ctx context.Context) error {
 	// Щотижневий шедулер: чекає до кінця поточного тижня, запускає перевірку і нотифікує чат
 	go bot.runWeeklyScheduler(ctx)
 
+	// Graceful shutdown
+	go func() {
+		<-ctx.Done()
+		bh.Stop()
+	}()
+
 	bh.Start()
 	return nil
 }
@@ -531,4 +572,137 @@ func (bot *Bot) notifyWeeklyResult(ctx context.Context, chatID int64, failed []s
 	}
 
 	_ = bot.SendMessage(ctx, chatID, text)
+}
+
+func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
+	// 1. Reply-based Dispute/Reinstate
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		if message.ReplyToMessage == nil {
+			return nil
+		}
+		// Only respond to replies on our own messages (rocket/medal)
+		if message.ReplyToMessage.From.ID != bot.client.ID() {
+			return nil
+		}
+
+		chatID := message.Chat.ID
+		messageID := message.ReplyToMessage.MessageID
+		user := message.From
+
+		isDispute := message.Text == EmojiDispute || (message.Sticker != nil && message.Sticker.FileID == StickerMiddleFinger)
+		isReinstate := message.Text == EmojiReinstate || (message.Sticker != nil && message.Sticker.FileID == StickerThumbsUp)
+
+		if isDispute {
+			targetUserID, isSession, disputeErr := bot.service.DisputeWorkout(ctx, chatID, messageID, user.ID)
+			if disputeErr != nil {
+				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgDisputeError, disputeErr))
+				return nil
+			}
+			// Try to get target username for better message
+			targetUser, _ := bot.client.GetChatMember(ctx, &telego.GetChatMemberParams{
+				ChatID: telego.ChatID{ID: chatID},
+				UserID: targetUserID,
+			})
+			targetName := "учасника"
+			if targetUser != nil {
+				targetName = targetUser.MemberUser().Username
+			}
+
+			if isSession {
+				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf("🚀 Старт користувача @%s скасовано користувачем @%s.", targetName, user.Username))
+			} else {
+				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgDisputeSuccess, targetName, user.Username))
+			}
+		} else if isReinstate {
+			reinstateErr := bot.service.ReinstateWorkout(ctx, chatID, messageID, user.ID)
+			if reinstateErr != nil {
+				return nil // Silently ignore invalid reinstates
+			}
+
+			// Try to get original target user
+			workout, _ := bot.service.GetWorkoutByMessage(ctx, chatID, messageID)
+			targetName := "учасника"
+			if workout != nil {
+				targetUser, _ := bot.client.GetChatMember(ctx, &telego.GetChatMemberParams{
+					ChatID: telego.ChatID{ID: chatID},
+					UserID: workout.UserID,
+				})
+				if targetUser != nil {
+					targetName = targetUser.MemberUser().Username
+				}
+			}
+
+			_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgReinstateSuccess, targetName))
+		}
+
+		return nil
+	}, func(ctx context.Context, u telego.Update) bool {
+		return u.Message != nil && u.Message.ReplyToMessage != nil
+	})
+
+	// 2. /subtract @username [amount]
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		fields := strings.Fields(message.Text)
+		if len(fields) < 2 {
+			_ = bot.SendMessage(ctx, message.Chat.ID, "❌ Використовуйте: /subtract @username [кількість]")
+			return nil
+		}
+
+		targetUsername := fields[1]
+		amount := 1
+		if len(fields) >= 3 {
+			fmt.Sscanf(fields[2], "%d", &amount)
+		}
+
+		isNotAnonymous := false
+		// Create poll
+		poll, err := bot.client.SendPoll(ctx, &telego.SendPollParams{
+			ChatID:      telego.ChatID{ID: message.Chat.ID},
+			Question:    fmt.Sprintf("Відняти %d тренування у %s?", amount, targetUsername),
+			Options:     []telego.InputPollOption{{Text: "Так"}, {Text: "Ні"}},
+			IsAnonymous: &isNotAnonymous,
+			Type:        "regular",
+		})
+		if err != nil {
+			return err
+		}
+
+		err = bot.service.InitiateSubtract(ctx, message.Chat.ID, message.From.ID, targetUsername, amount, poll.Poll.ID)
+		if err != nil {
+			_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf("❌ Помилка: %s", err))
+			return nil
+		}
+
+		_ = bot.SendMessage(ctx, message.Chat.ID, fmt.Sprintf(MsgSubtractVoteStart, amount, targetUsername, targetUsername))
+
+		// Schedule poll closing after 5 minutes
+		go func(pID string, chatID int64, tUser string, amt int) {
+			time.Sleep(5 * time.Minute)
+			p, err := bot.client.StopPoll(ctx, &telego.StopPollParams{
+				ChatID:    telego.ChatID{ID: chatID},
+				MessageID: poll.MessageID,
+			})
+			if err != nil {
+				log.Printf("failed to stop poll: %v", err)
+				return
+			}
+
+			totalVoters := p.TotalVoterCount
+			totalYes := 0
+			for _, opt := range p.Options {
+				if opt.Text == "Так" {
+					totalYes = opt.VoterCount
+				}
+			}
+
+			success, _ := bot.service.HandlePollUpdate(ctx, pID, totalVoters, totalYes)
+			if success {
+				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractSuccess, tUser, amt))
+			} else {
+				_ = bot.SendMessage(ctx, chatID, fmt.Sprintf(MsgSubtractFailed, tUser))
+			}
+		}(poll.Poll.ID, message.Chat.ID, targetUsername, amount)
+
+		return nil
+	}, th.CommandEqual("subtract"))
 }

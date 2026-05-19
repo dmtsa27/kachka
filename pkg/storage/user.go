@@ -76,3 +76,14 @@ func (s *Storage) GetAllActiveUsers(ctx context.Context) ([]User, error) {
 
 	return users, rows.Err()
 }
+
+func (s *Storage) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	// Remove @ if present
+	if len(username) > 0 && username[0] == '@' {
+		username = username[1:]
+	}
+
+	var id int64
+	err := s.db.QueryRowContext(ctx, `SELECT telegram_id FROM users WHERE username = $1`, username).Scan(&id)
+	return id, err
+}

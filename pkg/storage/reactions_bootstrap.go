@@ -186,8 +186,9 @@ func (s *Storage) CancelCountedByMessage(ctx context.Context, chatID int64, mess
 	}
 
 	workoutResult, err := tx.ExecContext(ctx, `
-		DELETE FROM workouts
-		WHERE chat_id = $1 AND completion_message_id = $2 AND CAST(workout_date AS DATE) = CURRENT_DATE
+		UPDATE workouts
+		SET is_cancelled = true, cancelled_by = 0, cancelled_at = NOW()
+		WHERE chat_id = $1 AND completion_message_id = $2 AND CAST(workout_date AS DATE) = CURRENT_DATE AND is_cancelled = false
 	`, chatID, messageID)
 	if err != nil {
 		return false, err

@@ -48,6 +48,7 @@ func main() {
 		Challenge:  mystorage,
 		Bootstrap:  mystorage,
 		Moderation: mystorage,
+		Votes:      mystorage,
 		Notifier:   bot,
 	})
 	bot.SetService(svc)

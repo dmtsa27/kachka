@@ -31,3 +31,7 @@ func (u *userService) IsActiveUser(ctx context.Context, userID int64) (bool, err
 	}
 	return user.IsActive, nil
 }
+
+func (u *userService) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	return u.users.GetUserIDByUsername(ctx, username)
+}

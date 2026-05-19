@@ -25,12 +25,14 @@ type UserRepository interface {
 	GetAllActiveUsers(ctx context.Context) ([]domain.User, error)
 	// BatchDeactivateUsers deactivates all passed users in one transaction.
 	BatchDeactivateUsers(ctx context.Context, userIDs []int64) error
+	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
 }
 
 type SessionRepository interface {
 	HasTrainedToday(ctx context.Context, userID int64, chatID int64) (bool, error)
 	StartSession(ctx context.Context, userID int64, chatID int64, messageID int) error
 	GetSession(ctx context.Context, userID int64, chatID int64) (*domain.Session, error)
+	GetSessionByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Session, error)
 	AddLatestSession(ctx context.Context, userID int64, chatID int64) error
 	DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error
 }
@@ -41,6 +43,16 @@ type WorkoutRepository interface {
 	WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error)
 	// GetWorkoutCounts returns workout counts for all active users since weekStart.
 	GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error)
+	CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (targetUserID int64, err error)
+	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
+	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+	SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) error
+}
+
+type VoteRepository interface {
+	CreateVote(ctx context.Context, vote domain.Vote) error
+	GetVoteByPollID(ctx context.Context, pollID string) (*domain.Vote, error)
+	CompleteVote(ctx context.Context, pollID string, success bool) error
 }
 
 type BootstrapRepository interface {
@@ -100,6 +112,7 @@ type Deps struct {
 	Challenge  ChallengeRepository
 	Bootstrap  BootstrapRepository
 	Moderation ModerationRepository
+	Votes      VoteRepository
 	Notifier   Notifier
 	Rules      Rules
 }
@@ -139,19 +152,30 @@ type CircleUseCase interface {
 	CancelSession(ctx context.Context, chatID int64, messageID int)
 }
 
+// ModerationUseCase defines operations for workout disputes and voting.
+type ModerationUseCase interface {
+	DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (targetUserID int64, isSession bool, err error)
+	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error
+	InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
+	HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error)
+	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+}
+
 // UserUseCase defines operations for user management.
 type UserUseCase interface {
 	RegisterUser(ctx context.Context, telegramID int64, username string) error
 	IsActiveUser(ctx context.Context, userID int64) (bool, error)
+	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
 }
 
 // Service is a facade that delegates to focused use cases.
 type Service struct {
-	Users     UserUseCase
-	Circle    CircleUseCase
-	Challenge ChallengeUseCase
-	Bootstrap BootstrapUseCase
-	rules     Rules
+	Users      UserUseCase
+	Circle     CircleUseCase
+	Challenge  ChallengeUseCase
+	Bootstrap  BootstrapUseCase
+	Moderation ModerationUseCase
+	rules      Rules
 }
 
 func New(deps Deps) *Service {
@@ -177,14 +201,48 @@ func New(deps Deps) *Service {
 		moderation: deps.Moderation,
 		challenge:  deps.Challenge,
 	}
+	modSvc := &moderationService{
+		workouts: deps.Workouts,
+		sessions: deps.Sessions,
+		votes:    deps.Votes,
+		users:    userSvc,
+		notifier: deps.Notifier,
+	}
 
 	return &Service{
-		Users:     userSvc,
-		Circle:    circleSvc,
-		Challenge: challengeSvc,
-		Bootstrap: bootstrapSvc,
-		rules:     rules,
+		Users:      userSvc,
+		Circle:     circleSvc,
+		Challenge:  challengeSvc,
+		Bootstrap:  bootstrapSvc,
+		Moderation: modSvc,
+		rules:      rules,
 	}
+}
+
+// ... (keep existing methods)
+
+func (s *Service) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	return s.Users.GetUserIDByUsername(ctx, username)
+}
+
+func (s *Service) DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (int64, bool, error) {
+	return s.Moderation.DisputeWorkout(ctx, chatID, messageID, disputerID)
+}
+
+func (s *Service) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstaterID int64) error {
+	return s.Moderation.ReinstateWorkout(ctx, chatID, messageID, reinstaterID)
+}
+
+func (s *Service) InitiateSubtract(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error {
+	return s.Moderation.InitiateSubtract(ctx, chatID, initiatorID, targetUsername, amount, pollID)
+}
+
+func (s *Service) HandlePollUpdate(ctx context.Context, pollID string, totalVoters int, totalYes int) (bool, error) {
+	return s.Moderation.HandlePollUpdate(ctx, pollID, totalVoters, totalYes)
+}
+
+func (s *Service) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+	return s.Moderation.GetWorkoutByMessage(ctx, chatID, messageID)
 }
 
 func normalizeRules(r Rules) Rules {

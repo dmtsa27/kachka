@@ -12,10 +12,11 @@ import (
 )
 
 type fakeUsers struct {
-	createUser       func(ctx context.Context, user domain.User) error
-	readUser         func(ctx context.Context, telegramID int64) (*domain.User, error)
-	getAllActive     func(ctx context.Context) ([]domain.User, error)
-	batchDeactivate  func(ctx context.Context, userIDs []int64) error
+	createUser          func(ctx context.Context, user domain.User) error
+	readUser            func(ctx context.Context, telegramID int64) (*domain.User, error)
+	getAllActive        func(ctx context.Context) ([]domain.User, error)
+	batchDeactivate     func(ctx context.Context, userIDs []int64) error
+	getUserIDByUsername func(ctx context.Context, username string) (int64, error)
 }
 
 func (f *fakeUsers) CreateUser(ctx context.Context, user domain.User) error {
@@ -44,6 +45,13 @@ func (f *fakeUsers) BatchDeactivateUsers(ctx context.Context, userIDs []int64) e
 		return fmt.Errorf("unexpected BatchDeactivateUsers")
 	}
 	return f.batchDeactivate(ctx, userIDs)
+}
+
+func (f *fakeUsers) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	if f.getUserIDByUsername == nil {
+		return 0, fmt.Errorf("unexpected GetUserIDByUsername")
+	}
+	return f.getUserIDByUsername(ctx, username)
 }
 
 type fakeSessions struct {
@@ -90,10 +98,14 @@ func (f *fakeSessions) DeleteSessionToday(ctx context.Context, chatID int64, mes
 }
 
 type fakeWorkouts struct {
-	hasWorkoutToday func(ctx context.Context, userID int64, chatID int64) (bool, error)
-	createWorkout   func(ctx context.Context, workout domain.Workout) error
-	weeklyWorkouts  func(ctx context.Context, userID int64, weekStart time.Time) (int, error)
+	hasWorkoutToday  func(ctx context.Context, userID int64, chatID int64) (bool, error)
+	createWorkout    func(ctx context.Context, workout domain.Workout) error
+	weeklyWorkouts   func(ctx context.Context, userID int64, weekStart time.Time) (int, error)
 	getWorkoutCounts func(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error)
+	cancelWorkout    func(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error)
+	reinstateWorkout func(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
+	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+	subtractWorkouts func(ctx context.Context, userID int64, chatID int64, amount int) error
 }
 
 func (f *fakeWorkouts) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
@@ -122,6 +134,34 @@ func (f *fakeWorkouts) GetWorkoutCounts(ctx context.Context, weekStart time.Time
 		return nil, fmt.Errorf("unexpected GetWorkoutCounts")
 	}
 	return f.getWorkoutCounts(ctx, weekStart)
+}
+
+func (f *fakeWorkouts) CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error) {
+	if f.cancelWorkout == nil {
+		return 0, fmt.Errorf("unexpected CancelWorkout")
+	}
+	return f.cancelWorkout(ctx, chatID, messageID, cancelledBy)
+}
+
+func (f *fakeWorkouts) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error {
+	if f.reinstateWorkout == nil {
+		return fmt.Errorf("unexpected ReinstateWorkout")
+	}
+	return f.reinstateWorkout(ctx, chatID, messageID, reinstatedBy)
+}
+
+func (f *fakeWorkouts) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+	if f.getWorkoutByMsg == nil {
+		return nil, fmt.Errorf("unexpected GetWorkoutByMessage")
+	}
+	return f.getWorkoutByMsg(ctx, chatID, messageID)
+}
+
+func (f *fakeWorkouts) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) error {
+	if f.subtractWorkouts == nil {
+		return fmt.Errorf("unexpected SubtractWorkouts")
+	}
+	return f.subtractWorkouts(ctx, userID, chatID, amount)
 }
 
 type fakeChallenges struct {
@@ -251,6 +291,33 @@ func (f *fakeModeration) CancelCountedByMessage(ctx context.Context, chatID int6
 		return false, fmt.Errorf("unexpected CancelCountedByMessage")
 	}
 	return f.cancelCounted(ctx, chatID, messageID)
+}
+
+type fakeVotes struct {
+	createVote      func(ctx context.Context, vote domain.Vote) error
+	getVoteByPollID func(ctx context.Context, pollID string) (*domain.Vote, error)
+	completeVote    func(ctx context.Context, pollID string, success bool) error
+}
+
+func (f *fakeVotes) CreateVote(ctx context.Context, vote domain.Vote) error {
+	if f.createVote == nil {
+		return fmt.Errorf("unexpected CreateVote")
+	}
+	return f.createVote(ctx, vote)
+}
+
+func (f *fakeVotes) GetVoteByPollID(ctx context.Context, pollID string) (*domain.Vote, error) {
+	if f.getVoteByPollID == nil {
+		return nil, fmt.Errorf("unexpected GetVoteByPollID")
+	}
+	return f.getVoteByPollID(ctx, pollID)
+}
+
+func (f *fakeVotes) CompleteVote(ctx context.Context, pollID string, success bool) error {
+	if f.completeVote == nil {
+		return fmt.Errorf("unexpected CompleteVote")
+	}
+	return f.completeVote(ctx, pollID, success)
 }
 
 type fakeNotifier struct {

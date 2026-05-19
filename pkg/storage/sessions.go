@@ -56,6 +56,26 @@ func (s *Storage) GetSession(ctx context.Context, userID int64, chatID int64) (*
 	return &session, nil
 }
 
+func (s *Storage) GetSessionByMessage(ctx context.Context, chatID int64, messageID int) (*Session, error) {
+	var session Session
+	query := `SELECT id, user_id, chat_id, started_at, last_video_at
+	          FROM sessions
+	          WHERE chat_id = $1 AND message_id = $2 AND session_date = CURRENT_DATE`
+
+	err := s.db.QueryRowContext(ctx, query, chatID, messageID).Scan(
+		&session.ID,
+		&session.UserID,
+		&session.ChatID,
+		&session.StartedAt,
+		&session.LastVideoAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &session, nil
+}
+
 func (s *Storage) DeleteSessionToday(ctx context.Context, chatID int64, messageID int) error {
 	query := `DELETE FROM sessions WHERE chat_id = $1 AND message_id = $2 AND session_date = CURRENT_DATE`
 	_, err := s.db.ExecContext(ctx, query, chatID, messageID)
