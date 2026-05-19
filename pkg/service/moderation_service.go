@@ -153,3 +153,7 @@ func (m *moderationService) HandlePollUpdate(ctx context.Context, pollID string,
 func (m *moderationService) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
 	return m.workouts.GetWorkoutByMessage(ctx, chatID, messageID)
 }
+
+func (m *moderationService) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	return m.workouts.GetActiveChallengeVotersCount(ctx, chatID)
+}

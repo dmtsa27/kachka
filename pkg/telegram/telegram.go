@@ -36,6 +36,8 @@ type BotService interface {
 	InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
 	HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error)
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+	GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error)
+	GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error)
 }
 
 type Bot struct {
@@ -456,6 +458,7 @@ func (bot *Bot) Start(ctx context.Context) error {
 
 	// Щотижневий шедулер: чекає до кінця поточного тижня, запускає перевірку і нотифікує чат
 	go bot.runWeeklyScheduler(ctx)
+	go bot.runDailyStatsScheduler(ctx)
 
 	// Graceful shutdown
 	go func() {
@@ -512,6 +515,11 @@ func (bot *Bot) runWeeklyScheduler(ctx context.Context) {
 				nextCheck := ch.StartedAt.Add(time.Duration(weekNumber+1) * 7 * 24 * time.Hour)
 
 				if time.Now().After(nextCheck) {
+					// Check if we already did this check for this week
+					if ch.LastWeeklyCheckAt != nil && !ch.LastWeeklyCheckAt.Before(nextCheck) {
+						continue
+					}
+
 					log.Printf("scheduler: running weekly check for chat %d", ch.ChatID)
 					failed, err := bot.service.WeeklyCheck(ctx, ch)
 					if err != nil {
@@ -519,6 +527,10 @@ func (bot *Bot) runWeeklyScheduler(ctx context.Context) {
 						continue
 					}
 					bot.notifyWeeklyResult(ctx, ch.ChatID, failed)
+
+					if err := bot.service.MarkWeeklyCheckDone(ctx, ch.ChallengeID); err != nil {
+						log.Printf("scheduler: failed to mark weekly check done for chat %d: %v", ch.ChatID, err)
+					}
 				}
 			}
 		}
@@ -529,6 +541,72 @@ func (bot *Bot) runWeeklyScheduler(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (bot *Bot) runDailyStatsScheduler(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		now := time.Now()
+		// Run daily stats at 00:00
+		if now.Hour() == 0 {
+			challenges, err := bot.service.ActiveChallenges(ctx)
+			if err != nil {
+				log.Printf("stats scheduler: failed to fetch active challenges: %v", err)
+			} else {
+				for _, ch := range challenges {
+					// Check if we already sent stats today
+					if ch.LastDailyStatsAt != nil &&
+						ch.LastDailyStatsAt.Day() == now.Day() &&
+						ch.LastDailyStatsAt.Month() == now.Month() &&
+						ch.LastDailyStatsAt.Year() == now.Year() {
+						continue
+					}
+
+					log.Printf("stats scheduler: sending daily stats for chat %d", ch.ChatID)
+					bot.sendDailyStats(ctx, ch.ChatID)
+
+					if err := bot.service.MarkDailyStatsDone(ctx, ch.ChallengeID); err != nil {
+						log.Printf("stats scheduler: failed to mark daily stats done for chat %d: %v", ch.ChatID, err)
+					}
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (bot *Bot) sendDailyStats(ctx context.Context, chatID int64) {
+	stats, err := bot.service.GetStats(ctx, chatID)
+	if err != nil {
+		log.Printf("failed to get stats for daily report (chat=%d): %v", chatID, err)
+		return
+	}
+
+	text := MsgDailyStatsHeader
+	for _, s := range stats {
+		statusEmoji := MsgStatusActive
+		inactiveText := ""
+		if !s.IsActive {
+			statusEmoji = MsgStatusInactive
+			inactiveText = MsgTextInactive
+		}
+
+		todayEmoji := MsgStatusNotDoneToday
+		if s.HasWorkoutToday {
+			todayEmoji = MsgStatusDoneToday
+		}
+
+		text += fmt.Sprintf(MsgUserDailyStats, statusEmoji, s.Username, s.WeeklyCount, todayEmoji, inactiveText)
+	}
+
+	_, _ = bot.SendMessage(ctx, chatID, text)
 }
 
 func (bot *Bot) notifyWeeklyResult(ctx context.Context, chatID int64, failed []service.UserInfo) {
@@ -655,11 +733,11 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			return nil
 		}
 
-		// Calculate expected voters (all active human members)
+		// Calculate expected voters (all active human members minus the target user)
 		expectedVoters := 1
-		count, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{ChatID: telego.ChatID{ID: message.Chat.ID}})
-		if err == nil && count != nil {
-			expectedVoters = *count - 2 // Exclude bot and the target user
+		count, err := bot.service.GetActiveChallengeVotersCount(ctx, message.Chat.ID)
+		if err == nil {
+			expectedVoters = count - 1
 			if expectedVoters < 1 {
 				expectedVoters = 1
 			}
@@ -800,11 +878,11 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			return nil
 		}
 
-		// Calculate expected voters (all active human members minus the target user and the bot)
+		// Calculate expected voters (all active human members)
 		expectedVoters := 1
-		count, err := bot.client.GetChatMemberCount(ctx, &telego.GetChatMemberCountParams{ChatID: telego.ChatID{ID: message.Chat.ID}})
-		if err == nil && count != nil {
-			expectedVoters = *count - 2
+		count, err := bot.service.GetActiveChallengeVotersCount(ctx, message.Chat.ID)
+		if err == nil {
+			expectedVoters = count
 			if expectedVoters < 1 {
 				expectedVoters = 1
 			}
@@ -909,4 +987,31 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 
 		return nil
 	}, th.CommandEqual("add"))
+
+	// 5. /stats
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		stats, err := bot.service.GetStats(ctx, message.Chat.ID)
+		if err != nil {
+			log.Printf("GetStats error: %v", err)
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "❌ Не вдалося отримати статистику.")
+			return nil
+		}
+
+		if len(stats) == 0 {
+			_, _ = bot.SendMessage(ctx, message.Chat.ID, "📊 Учасників поки немає.")
+			return nil
+		}
+
+		text := MsgStatsHeader
+		for _, s := range stats {
+			status := ""
+			if !s.IsActive {
+				status = "(вибув)"
+			}
+			text += fmt.Sprintf(MsgUserStats, s.Username, status, s.WeeklyCount, s.TotalCount)
+		}
+
+		_, _ = bot.SendMessage(ctx, message.Chat.ID, text)
+		return nil
+	}, th.CommandEqual("stats"))
 }

@@ -115,6 +115,8 @@ type fakeWorkouts struct {
 	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 	subtractWorkouts func(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
 	addWorkouts      func(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
+	getChatStats     func(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error)
+	getVotersCount   func(ctx context.Context, chatID int64) (int, error)
 }
 
 func (f *fakeWorkouts) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
@@ -180,6 +182,20 @@ func (f *fakeWorkouts) AddWorkouts(ctx context.Context, userID int64, chatID int
 	return f.addWorkouts(ctx, userID, chatID, amount)
 }
 
+func (f *fakeWorkouts) GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
+	if f.getChatStats == nil {
+		return nil, fmt.Errorf("unexpected GetChatStats")
+	}
+	return f.getChatStats(ctx, chatID, weekStart)
+}
+
+func (f *fakeWorkouts) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	if f.getVotersCount == nil {
+		return 0, fmt.Errorf("unexpected GetActiveChallengeVotersCount")
+	}
+	return f.getVotersCount(ctx, chatID)
+}
+
 type fakeChallenges struct {
 	getActiveChallenge     func(ctx context.Context) (*domain.Challenge, error)
 	getActiveByChat        func(ctx context.Context, chatID int64) (*domain.Challenge, error)
@@ -187,6 +203,8 @@ type fakeChallenges struct {
 	hasActiveChallengeChat func(ctx context.Context, chatID int64) (bool, error)
 	createChallenge        func(ctx context.Context, challenge domain.Challenge) error
 	deactivateForChat      func(ctx context.Context, chatID int64) error
+	markWeeklyDone         func(ctx context.Context, challengeID int) error
+	markDailyDone          func(ctx context.Context, challengeID int) error
 }
 
 func (f *fakeChallenges) GetActiveChallenge(ctx context.Context) (*domain.Challenge, error) {
@@ -229,6 +247,20 @@ func (f *fakeChallenges) DeactivateChallengeForChat(ctx context.Context, chatID 
 		return fmt.Errorf("unexpected DeactivateChallengeForChat")
 	}
 	return f.deactivateForChat(ctx, chatID)
+}
+
+func (f *fakeChallenges) MarkWeeklyCheckDone(ctx context.Context, challengeID int) error {
+	if f.markWeeklyDone == nil {
+		return nil // default to success in tests unless specified
+	}
+	return f.markWeeklyDone(ctx, challengeID)
+}
+
+func (f *fakeChallenges) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
+	if f.markDailyDone == nil {
+		return nil // default to success in tests unless specified
+	}
+	return f.markDailyDone(ctx, challengeID)
 }
 
 type fakeBootstrap struct {
@@ -306,6 +338,7 @@ type fakeModeration struct {
 	initiateAdd      func(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
 	handlePollUpdate func(ctx context.Context, pollID string, success bool) (int, error)
 	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+	getVotersCount   func(ctx context.Context, chatID int64) (int, error)
 }
 
 func (f *fakeModeration) CancelCountedByMessage(ctx context.Context, chatID int64, messageID int) (bool, error) {
@@ -355,6 +388,13 @@ func (f *fakeModeration) GetWorkoutByMessage(ctx context.Context, chatID int64, 
 		return nil, fmt.Errorf("unexpected GetWorkoutByMessage")
 	}
 	return f.getWorkoutByMsg(ctx, chatID, messageID)
+}
+
+func (f *fakeModeration) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	if f.getVotersCount == nil {
+		return 0, fmt.Errorf("unexpected GetActiveChallengeVotersCount")
+	}
+	return f.getVotersCount(ctx, chatID)
 }
 
 type fakeVotes struct {
@@ -1042,5 +1082,55 @@ func TestBootstrapService_UpdateConfig_Started(t *testing.T) {
 	err := svc.UpdateChallengeConfig(ctx, 1, 5, 30, 500)
 	if err == nil || err.Error() != "cannot change configuration after challenge has started or rules confirmed" {
 		t.Errorf("expected error 'cannot change configuration after challenge has started or rules confirmed', got %v", err)
+	}
+}
+
+func TestChallengeService_GetStats(t *testing.T) {
+	ctx := context.Background()
+
+	startedAt := time.Now().Add(-10 * 24 * time.Hour) // 10 days ago (week 1)
+	challenge := &domain.Challenge{ChatID: 1, StartedAt: startedAt}
+
+	challenges := &fakeChallenges{
+		getActiveByChat: func(ctx context.Context, chatID int64) (*domain.Challenge, error) {
+			return challenge, nil
+		},
+	}
+
+	workouts := &fakeWorkouts{
+		getChatStats: func(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
+			// Expected weekStart should be startedAt + 7 days
+			expectedWeekStart := startedAt.Add(7 * 24 * time.Hour)
+			if weekStart.Unix() != expectedWeekStart.Unix() {
+				return nil, fmt.Errorf("unexpected week start: got %v, want %v", weekStart, expectedWeekStart)
+			}
+
+			return []domain.UserStats{
+				{Username: "user1", WeeklyCount: 3, TotalCount: 5, IsActive: true},
+				{Username: "user2", WeeklyCount: 1, TotalCount: 2, IsActive: false},
+			}, nil
+		},
+	}
+
+	svc := New(Deps{
+		Challenge: challenges,
+		Workouts:  workouts,
+	})
+
+	stats, err := svc.GetStats(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetStats error: %v", err)
+	}
+
+	if len(stats) != 2 {
+		t.Fatalf("expected 2 stats, got %d", len(stats))
+	}
+
+	if stats[0].Username != "user1" || !stats[0].IsActive {
+		t.Errorf("unexpected stat for user1")
+	}
+
+	if stats[1].Username != "user2" || stats[1].IsActive {
+		t.Errorf("unexpected stat for user2 (should be inactive)")
 	}
 }

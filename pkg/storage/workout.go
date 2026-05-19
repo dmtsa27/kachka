@@ -2,8 +2,10 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"time"
 
+	"github.com/dmtsa27/kachka.git/pkg/domain"
 	"github.com/dmtsa27/kachka.git/pkg/service"
 )
 
@@ -33,7 +35,7 @@ func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, weekStart ti
 
 func (s *Storage) GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]service.UserWorkouts, error) {
 	query := `
-        SELECT u.telegram_id, u.username, COUNT(w.id) as workout_count
+        SELECT u.telegram_id, u.username, COUNT(DISTINCT CAST(w.workout_date AS DATE)) as workout_count
         FROM users u
         LEFT JOIN workouts w ON u.telegram_id = w.user_id 
             AND w.workout_date >= $1 
@@ -112,18 +114,32 @@ func (s *Storage) GetWorkoutByMessage(ctx context.Context, chatID int64, message
 }
 
 func (s *Storage) AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
-	// To "add" a workout, we create new workout records for the current date.
+	// To "add" workouts, we create new workout records for previous dates.
+	// We skip days that already have a workout (unique per user/chat/date).
 	count := 0
-	for i := 0; i < amount; i++ {
-		query := `INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
-		VALUES ($1, NOW(), $2, 0)`
-		_, err := s.db.ExecContext(ctx, query, userID, chatID)
+	added := 0
+	// We try to find 'amount' available days starting from today and going backwards
+	for i := 0; added < amount && i < 30; i++ { // limit to 30 days back to avoid infinite loop
+		query := fmt.Sprintf(`
+			INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
+			SELECT $1, (CAST(NOW() AS DATE) - INTERVAL '%d days'), $2, 0
+			WHERE NOT EXISTS (
+				SELECT 1 FROM workouts 
+				WHERE user_id = $1 AND chat_id = $2 
+				AND CAST(workout_date AS DATE) = (CAST(NOW() AS DATE) - INTERVAL '%d days')
+				AND is_cancelled = false
+			)`, i, i)
+		res, err := s.db.ExecContext(ctx, query, userID, chatID)
 		if err != nil {
-			return count, err
+			return added, err
+		}
+		rows, _ := res.RowsAffected()
+		if rows > 0 {
+			added++
 		}
 		count++
 	}
-	return count, nil
+	return added, nil
 }
 
 func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
@@ -143,4 +159,65 @@ func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int
 	}
 	affected, err := res.RowsAffected()
 	return int(affected), err
+}
+
+func (s *Storage) GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
+	query := `
+        SELECT 
+            u.telegram_id, 
+            COALESCE(u.username, ''), 
+            COUNT(DISTINCT CAST(w_weekly.workout_date AS DATE)) as weekly_count,
+            COUNT(DISTINCT CAST(w_total.workout_date AS DATE)) as total_count,
+            u.is_active,
+            EXISTS(
+                SELECT 1 FROM workouts w_today 
+                WHERE w_today.user_id = u.telegram_id 
+                  AND w_today.chat_id = $1 
+                  AND CAST(w_today.workout_date AS DATE) = CURRENT_DATE 
+                  AND w_today.is_cancelled = false
+            ) as has_workout_today
+        FROM chat_members cm
+        JOIN users u ON u.telegram_id = cm.user_id
+        LEFT JOIN workouts w_weekly ON u.telegram_id = w_weekly.user_id 
+            AND w_weekly.chat_id = cm.chat_id
+            AND w_weekly.workout_date >= $2 
+            AND w_weekly.workout_date < $2 + INTERVAL '7 days'
+            AND w_weekly.is_cancelled = false
+        LEFT JOIN workouts w_total ON u.telegram_id = w_total.user_id 
+            AND w_total.chat_id = cm.chat_id
+            AND w_total.is_cancelled = false
+        WHERE cm.chat_id = $1 AND cm.is_bot = false AND cm.is_active = true
+        GROUP BY u.telegram_id, u.username, u.is_active
+        ORDER BY weekly_count DESC, total_count DESC`
+
+	rows, err := s.db.QueryContext(ctx, query, chatID, weekStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []domain.UserStats
+	for rows.Next() {
+		var us domain.UserStats
+		if err := rows.Scan(&us.TelegramID, &us.Username, &us.WeeklyCount, &us.TotalCount, &us.IsActive, &us.HasWorkoutToday); err != nil {
+			return nil, err
+		}
+		stats = append(stats, us)
+	}
+
+	return stats, rows.Err()
+}
+
+func (s *Storage) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	var count int
+	query := `
+        SELECT COUNT(*)
+        FROM chat_members cm
+        JOIN users u ON u.telegram_id = cm.user_id
+        WHERE cm.chat_id = $1
+          AND cm.is_active = true
+          AND cm.is_bot = false
+          AND u.is_active = true`
+	err := s.db.QueryRowContext(ctx, query, chatID).Scan(&count)
+	return count, err
 }

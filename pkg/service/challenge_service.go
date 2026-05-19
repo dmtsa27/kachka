@@ -65,3 +65,24 @@ func (c *challengeService) WeeklyCheck(ctx context.Context, challenge domain.Cha
 
 	return failed, nil
 }
+
+func (c *challengeService) MarkWeeklyCheckDone(ctx context.Context, challengeID int) error {
+	return c.challenge.MarkWeeklyCheckDone(ctx, challengeID)
+}
+
+func (c *challengeService) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
+	return c.challenge.MarkDailyStatsDone(ctx, challengeID)
+}
+
+func (c *challengeService) GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error) {
+	challenge, err := c.challenge.GetActiveChallengeByChat(ctx, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("get active challenge: %w", err)
+	}
+
+	elapsed := time.Since(challenge.StartedAt)
+	weekNumber := int(elapsed / (7 * 24 * time.Hour))
+	weekStart := challenge.StartedAt.Add(time.Duration(weekNumber) * 7 * 24 * time.Hour)
+
+	return c.workouts.GetChatStats(ctx, chatID, weekStart)
+}

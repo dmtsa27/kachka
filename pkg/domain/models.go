@@ -50,15 +50,27 @@ type Vote struct {
 	IsSuccess    bool
 }
 
+// UserStats represents workout statistics for a user.
+type UserStats struct {
+	TelegramID      int64
+	Username        string
+	WeeklyCount     int
+	TotalCount      int
+	IsActive        bool
+	HasWorkoutToday bool
+}
+
 // Challenge is the active challenge context.
 type Challenge struct {
-	ChallengeID int
-	IsActive    bool
-	DaysPerWeek int
-	Duration    int
-	Price       int
-	StartedAt   time.Time
-	ChatID      int64
+	ChallengeID       int
+	IsActive          bool
+	DaysPerWeek       int
+	Duration          int
+	Price             int
+	StartedAt         time.Time
+	ChatID            int64
+	LastWeeklyCheckAt *time.Time
+	LastDailyStatsAt  *time.Time
 }
 
 // ChallengeBootstrap stores the pre-start bootstrap state.

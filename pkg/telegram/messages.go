@@ -78,7 +78,7 @@ const (
 
 	// MsgWeeklyFailed відправляється в кінці тижня.
 	// %s — рядок з @username тих хто не виконав норму.
-	MsgWeeklyFailed = "📊 Підсумок тижня:\n\n❌ Не виконали норму: %s\n"
+	MsgWeeklyFailed = "📊 Підсумок тижня:\n\n❌ Не виконали норму і вибувають з челенджу: %s\n"
 
 	// MsgWeeklyAllGood відправляється якщо всі виконали норму за тиждень.
 	MsgWeeklyAllGood = "📊 Підсумок тижня:\n\n✅"
@@ -117,4 +117,15 @@ const (
 	MsgAddVoteStart = "🗳 Запущено голосування за ДОДАВАННЯ %d тренувань для %s. Голосування триватиме 5 хвилин. Потрібна ОДНОГОЛОСНА підтримка всіх учасників."
 	MsgAddSuccess = "📈 Результат: @%s додано %d тренування за цей тиждень."
 	MsgAddFailed = "⚖️ Результат: Голосування відхилено. Тренування для @%s не додано."
+
+	MsgStatsHeader = "📊 Статистика учасників:\n"
+	MsgUserStats   = "%s %s: %d (тиждень) / %d (загалом)\n"
+
+	MsgDailyStatsHeader = "📊 Щоденна статистика:\n"
+	MsgUserDailyStats   = "%s %s: %d/нед, сьогодні: %s %s\n"
+	MsgStatusActive     = "🟢"
+	MsgStatusInactive   = "🔴"
+	MsgStatusDoneToday  = "💪"
+	MsgStatusNotDoneToday = "⏳"
+	MsgTextInactive     = "(вибув)"
 )

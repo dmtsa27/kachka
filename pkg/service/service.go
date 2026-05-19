@@ -48,6 +48,8 @@ type WorkoutRepository interface {
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
 	SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
 	AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
+	GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error)
+	GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error)
 }
 
 type VoteRepository interface {
@@ -78,6 +80,8 @@ type ChallengeRepository interface {
 	HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error)
 	CreateChallenge(ctx context.Context, challenge domain.Challenge) error
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
+	MarkWeeklyCheckDone(ctx context.Context, challengeID int) error
+	MarkDailyStatsDone(ctx context.Context, challengeID int) error
 }
 
 // Notifier sends bot messages to the chat.
@@ -135,6 +139,9 @@ type ChallengeUseCase interface {
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
 	ActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
 	WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]UserInfo, error)
+	GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error)
+	MarkWeeklyCheckDone(ctx context.Context, challengeID int) error
+	MarkDailyStatsDone(ctx context.Context, challengeID int) error
 }
 
 // CircleUserUseCase defines user operations needed by CircleUseCase.
@@ -161,6 +168,7 @@ type ModerationUseCase interface {
 	InitiateAdd(ctx context.Context, chatID int64, initiatorID int64, targetUsername string, amount int, pollID string) error
 	HandlePollUpdate(ctx context.Context, pollID string, success bool) (int, error)
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
+	GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error)
 }
 
 // UserUseCase defines operations for user management.
@@ -220,8 +228,6 @@ func New(deps Deps) *Service {
 		rules:      rules,
 	}
 }
-
-// ... (keep existing methods)
 
 func (s *Service) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
 	return s.Users.GetUserIDByUsername(ctx, username)
@@ -292,6 +298,14 @@ func (s *Service) WeeklyCheck(ctx context.Context, challenge domain.Challenge) (
 	return s.Challenge.WeeklyCheck(ctx, challenge)
 }
 
+func (s *Service) MarkWeeklyCheckDone(ctx context.Context, challengeID int) error {
+	return s.Challenge.MarkWeeklyCheckDone(ctx, challengeID)
+}
+
+func (s *Service) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
+	return s.Challenge.MarkDailyStatsDone(ctx, challengeID)
+}
+
 func (s *Service) InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
 	return s.Bootstrap.InitChallengeBootstrap(ctx, chatID, welcomeMessageID, isBotAdmin, expectedReactions)
 }
@@ -322,4 +336,12 @@ func (s *Service) GetChallengeConfig(ctx context.Context, chatID int64) (*domain
 
 func (s *Service) GetRules() Rules {
 	return s.rules
+}
+
+func (s *Service) GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error) {
+	return s.Challenge.GetStats(ctx, chatID)
+}
+
+func (s *Service) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	return s.Moderation.GetActiveChallengeVotersCount(ctx, chatID)
 }

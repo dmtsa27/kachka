@@ -84,7 +84,7 @@ func (s *Storage) UpdateChallenge(ctx context.Context, challenge Challenge) erro
 
 func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 	var challenge Challenge
-	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id, last_weekly_check_at, last_daily_stats_at
               FROM challenges WHERE is_active = true LIMIT 1`
 
 	err := s.db.QueryRowContext(ctx, query).Scan(
@@ -95,6 +95,8 @@ func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 		&challenge.Price,
 		&challenge.StartedAt,
 		&challenge.ChatID,
+		&challenge.LastWeeklyCheckAt,
+		&challenge.LastDailyStatsAt,
 	)
 	if err != nil {
 		return nil, err
@@ -105,7 +107,7 @@ func (s *Storage) GetActiveChallenge(ctx context.Context) (*Challenge, error) {
 
 func (s *Storage) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*Challenge, error) {
 	var challenge Challenge
-	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id, last_weekly_check_at, last_daily_stats_at
               FROM challenges WHERE chat_id = $1 AND is_active = true LIMIT 1`
 
 	err := s.db.QueryRowContext(ctx, query, chatID).Scan(
@@ -116,6 +118,8 @@ func (s *Storage) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*
 		&challenge.Price,
 		&challenge.StartedAt,
 		&challenge.ChatID,
+		&challenge.LastWeeklyCheckAt,
+		&challenge.LastDailyStatsAt,
 	)
 	if err != nil {
 		return nil, err
@@ -125,7 +129,7 @@ func (s *Storage) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*
 }
 
 func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, error) {
-	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id
+	query := `SELECT id, days_per_week, challenge_duration, is_active, price, started_at, chat_id, last_weekly_check_at, last_daily_stats_at
               FROM challenges WHERE is_active = true`
 
 	rows, err := s.db.QueryContext(ctx, query)
@@ -145,6 +149,8 @@ func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, erro
 			&challenge.Price,
 			&challenge.StartedAt,
 			&challenge.ChatID,
+			&challenge.LastWeeklyCheckAt,
+			&challenge.LastDailyStatsAt,
 		)
 		if err != nil {
 			return nil, err
@@ -153,6 +159,18 @@ func (s *Storage) GetAllActiveChallenges(ctx context.Context) ([]Challenge, erro
 	}
 
 	return challenges, rows.Err()
+}
+
+func (s *Storage) MarkWeeklyCheckDone(ctx context.Context, challengeID int) error {
+	query := `UPDATE challenges SET last_weekly_check_at = NOW() WHERE id = $1`
+	_, err := s.db.ExecContext(ctx, query, challengeID)
+	return err
+}
+
+func (s *Storage) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
+	query := `UPDATE challenges SET last_daily_stats_at = NOW() WHERE id = $1`
+	_, err := s.db.ExecContext(ctx, query, challengeID)
+	return err
 }
 
 // DeactivateChallengeForChat деактивує активний челендж та очищує дані для конкретного чату.
