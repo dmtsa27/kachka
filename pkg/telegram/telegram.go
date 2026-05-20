@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,23 @@ import (
 	"github.com/dmtsa27/kachka.git/pkg/service"
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
+	"go.uber.org/fx"
+)
+
+var Module = fx.Options(
+	fx.Provide(
+		func() (string, error) {
+			token := os.Getenv("BOT_TOKEN")
+			if token == "" {
+				return "", fmt.Errorf("BOT_TOKEN is empty")
+			}
+			return token, nil
+		},
+		func(token string) (*Bot, error) {
+			return New(token, nil)
+		},
+		func(b *Bot) service.Notifier { return b },
+	),
 )
 
 type BotService interface {
@@ -28,6 +46,8 @@ type BotService interface {
 	ActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
 	UpdateChallengeConfig(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error
 	GetChallengeConfig(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error)
+	MarkWeeklyCheckDone(ctx context.Context, challengeID int) error
+	MarkDailyStatsDone(ctx context.Context, challengeID int) error
 	GetRules() service.Rules
 	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
 	DisputeWorkout(ctx context.Context, chatID int64, messageID int, disputerID int64) (targetUserID int64, isSession bool, err error)
@@ -44,6 +64,7 @@ type Bot struct {
 	client    *telego.Bot
 	service   BotService
 	pollChans sync.Map // map[string]chan telego.Poll
+	handler   *th.BotHandler
 }
 
 type outboxMsg struct {
@@ -114,12 +135,16 @@ func (bot *Bot) Start(ctx context.Context) error {
 	bh.Use(func(ctx *th.Context, update telego.Update) error {
 		if update.Message != nil && update.Message.From != nil {
 			msg := update.Message
-			if err := bot.service.RegisterUser(ctx.Context(), msg.From.ID, msg.From.Username); err != nil {
-				log.Printf("RegisterUser error (user=%d): %v", msg.From.ID, err)
-			}
-			if err := bot.service.UpsertChatMember(ctx.Context(), msg.Chat.ID, msg.From.ID, msg.From.IsBot, true); err != nil {
-				log.Printf("UpsertChatMember error (chat=%d user=%d): %v", msg.Chat.ID, msg.From.ID, err)
-			}
+			// Run DB updates in background to avoid blocking the handler loop
+			go func(userID int64, username string, chatID int64, isBot bool) {
+				bgCtx := context.Background()
+				if err := bot.service.RegisterUser(bgCtx, userID, username); err != nil {
+					log.Printf("RegisterUser error (user=%d): %v", userID, err)
+				}
+				if err := bot.service.UpsertChatMember(bgCtx, chatID, userID, isBot, true); err != nil {
+					log.Printf("UpsertChatMember error (chat=%d user=%d): %v", chatID, userID, err)
+				}
+			}(msg.From.ID, msg.From.Username, msg.Chat.ID, msg.From.IsBot)
 		}
 		return ctx.Next(update)
 	})
@@ -433,7 +458,9 @@ func (bot *Bot) Start(ctx context.Context) error {
 			})
 
 			if err := bot.service.InitChallengeBootstrap(ctx, chatID, 0, isAdminNow, 1); err != nil {
-				log.Printf("InitChallengeBootstrap error (chat=%d): %v", chatID, err)
+				log.Printf("CRITICAL: InitChallengeBootstrap failed for new chat %d: %v. Please check database migrations!", chatID, err)
+			} else {
+				log.Printf("SUCCESS: Initialized bootstrap for new chat %d", chatID)
 			}
 
 		case !isLeaving && isMemberActive(newStatus):
@@ -456,18 +483,20 @@ func (bot *Bot) Start(ctx context.Context) error {
 		return nil
 	})
 
+	bot.handler = bh
+
 	// Щотижневий шедулер: чекає до кінця поточного тижня, запускає перевірку і нотифікує чат
 	go bot.runWeeklyScheduler(ctx)
 	go bot.runDailyStatsScheduler(ctx)
 
-	// Graceful shutdown
-	go func() {
-		<-ctx.Done()
-		bh.Stop()
-	}()
-
-	bh.Start()
+	bot.handler.Start()
 	return nil
+}
+
+func (bot *Bot) Stop() {
+	if bot.handler != nil {
+		bot.handler.Stop()
+	}
 }
 
 func isMemberActive(status string) bool {

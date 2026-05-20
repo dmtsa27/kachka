@@ -1,14 +1,17 @@
 include .env
-.PHONY: build run enterd migrate dbsnap watchdb docker-up docker-down up reset
+.PHONY: build run enterd migrate dbsnap watchdb docker-up docker-down up reset swag
 
-build:
+swag:
+	swag init -g cmd/bot/main.go -o docs
+
+build: swag
 	go build -o ./.bin/bot cmd/bot/main.go
 
-run:
+run: build
 	./.bin/bot
 
 enterd:
-	docker exec -it kachka_bot-db-1 psql -U dmytro -d kachka_bot
+	docker exec -it kachka_bot-db-1 psql -U $(DB_USER) -d $(DB_NAME)
 
 migrate:
 	GOOSE_DRIVER=postgres GOOSE_DBSTRING="$(DATABASE_URL)" goose -dir ./migrations up
@@ -19,7 +22,7 @@ dbsnap:
 watchdb:
 	watch -n 2 $(MAKE) dbsnap
 
-up:
+up: swag
 	docker compose up -d db
 	@echo "Waiting for database to be ready..."
 	@until docker compose exec db pg_isready -U $(DB_USER) -d $(DB_NAME) > /dev/null 2>&1; do \

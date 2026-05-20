@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/dmtsa27/kachka.git/pkg/domain"
+	"go.uber.org/fx"
 )
 
 // UserInfo is a lightweight DTO for reporting results.
@@ -22,6 +23,8 @@ type UserWorkouts struct {
 type UserRepository interface {
 	CreateUser(ctx context.Context, user domain.User) error
 	ReadUser(ctx context.Context, telegramID int64) (*domain.User, error)
+	UpdateUser(ctx context.Context, user domain.User) error
+	DeleteUser(ctx context.Context, telegramID int64) error
 	GetAllActiveUsers(ctx context.Context) ([]domain.User, error)
 	// BatchDeactivateUsers deactivates all passed users in one transaction.
 	BatchDeactivateUsers(ctx context.Context, userIDs []int64) error
@@ -77,8 +80,11 @@ type ChallengeRepository interface {
 	GetActiveChallenge(ctx context.Context) (*domain.Challenge, error)
 	GetActiveChallengeByChat(ctx context.Context, chatID int64) (*domain.Challenge, error)
 	GetAllActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
+	GetChallenge(ctx context.Context, challengeID int) (*domain.Challenge, error)
 	HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error)
 	CreateChallenge(ctx context.Context, challenge domain.Challenge) error
+	UpdateChallenge(ctx context.Context, challenge domain.Challenge) error
+	DeleteChallenge(ctx context.Context, challengeID int) error
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
 	MarkWeeklyCheckDone(ctx context.Context, challengeID int) error
 	MarkDailyStatsDone(ctx context.Context, challengeID int) error
@@ -109,8 +115,19 @@ func DefaultRules() Rules {
 	}
 }
 
+var Module = fx.Options(
+	fx.Provide(
+		func() Rules { return DefaultRules() },
+		func(lc fx.Lifecycle, deps Deps) *Service {
+			return New(deps)
+		},
+	),
+)
+
 // Deps collects explicit dependencies for the service facade.
 type Deps struct {
+	fx.In
+
 	Users      UserRepository
 	Sessions   SessionRepository
 	Workouts   WorkoutRepository
@@ -138,10 +155,14 @@ type ChallengeUseCase interface {
 	StartChallenge(ctx context.Context, chatID int64, daysPerWeek int, duration int) error
 	DeactivateChallengeForChat(ctx context.Context, chatID int64) error
 	ActiveChallenges(ctx context.Context) ([]domain.Challenge, error)
+	GetChallenge(ctx context.Context, challengeID int) (*domain.Challenge, error)
+	UpdateChallenge(ctx context.Context, challenge domain.Challenge) error
+	DeleteChallenge(ctx context.Context, challengeID int) error
 	WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]UserInfo, error)
 	GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error)
 	MarkWeeklyCheckDone(ctx context.Context, challengeID int) error
 	MarkDailyStatsDone(ctx context.Context, challengeID int) error
+	AddWorkoutDirect(ctx context.Context, chatID int64, username string, amount int) (int, error)
 }
 
 // CircleUserUseCase defines user operations needed by CircleUseCase.
@@ -174,8 +195,12 @@ type ModerationUseCase interface {
 // UserUseCase defines operations for user management.
 type UserUseCase interface {
 	RegisterUser(ctx context.Context, telegramID int64, username string) error
+	ReadUser(ctx context.Context, telegramID int64) (*domain.User, error)
+	UpdateUser(ctx context.Context, user domain.User) error
+	DeleteUser(ctx context.Context, telegramID int64) error
 	IsActiveUser(ctx context.Context, userID int64) (bool, error)
 	GetUserIDByUsername(ctx context.Context, username string) (int64, error)
+	GetAllActiveUsers(ctx context.Context) ([]domain.User, error)
 }
 
 // Service is a facade that delegates to focused use cases.
@@ -271,6 +296,22 @@ func (s *Service) RegisterUser(ctx context.Context, telegramID int64, username s
 	return s.Users.RegisterUser(ctx, telegramID, username)
 }
 
+func (s *Service) ReadUser(ctx context.Context, telegramID int64) (*domain.User, error) {
+	return s.Users.ReadUser(ctx, telegramID)
+}
+
+func (s *Service) UpdateUser(ctx context.Context, user domain.User) error {
+	return s.Users.UpdateUser(ctx, user)
+}
+
+func (s *Service) DeleteUser(ctx context.Context, telegramID int64) error {
+	return s.Users.DeleteUser(ctx, telegramID)
+}
+
+func (s *Service) GetAllActiveUsers(ctx context.Context) ([]domain.User, error) {
+	return s.Users.GetAllActiveUsers(ctx)
+}
+
 func (s *Service) HandleCircle(ctx context.Context, userID int64, duration int, chatID int64, messageID int) error {
 	return s.Circle.HandleCircle(ctx, userID, duration, chatID, messageID)
 }
@@ -294,6 +335,18 @@ func (s *Service) ActiveChallenges(ctx context.Context) ([]domain.Challenge, err
 	return s.Challenge.ActiveChallenges(ctx)
 }
 
+func (s *Service) GetChallenge(ctx context.Context, challengeID int) (*domain.Challenge, error) {
+	return s.Challenge.GetChallenge(ctx, challengeID)
+}
+
+func (s *Service) UpdateChallenge(ctx context.Context, challenge domain.Challenge) error {
+	return s.Challenge.UpdateChallenge(ctx, challenge)
+}
+
+func (s *Service) DeleteChallenge(ctx context.Context, challengeID int) error {
+	return s.Challenge.DeleteChallenge(ctx, challengeID)
+}
+
 func (s *Service) WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]UserInfo, error) {
 	return s.Challenge.WeeklyCheck(ctx, challenge)
 }
@@ -304,6 +357,10 @@ func (s *Service) MarkWeeklyCheckDone(ctx context.Context, challengeID int) erro
 
 func (s *Service) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
 	return s.Challenge.MarkDailyStatsDone(ctx, challengeID)
+}
+
+func (s *Service) AddWorkoutDirect(ctx context.Context, chatID int64, username string, amount int) (int, error) {
+	return s.Challenge.AddWorkoutDirect(ctx, chatID, username, amount)
 }
 
 func (s *Service) InitChallengeBootstrap(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {

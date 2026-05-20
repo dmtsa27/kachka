@@ -56,6 +56,39 @@ func (s *Storage) BatchDeactivateUsers(ctx context.Context, userIDs []int64) err
 	return tx.Commit()
 }
 
+func (s *Storage) UpdateUser(ctx context.Context, user User) error {
+	query := `UPDATE users SET username = $1, is_active = $2, days_trained = $3 WHERE telegram_id = $4`
+	_, err := s.db.ExecContext(ctx, query, user.Username, user.IsActive, user.DaysTrained, user.TelegramID)
+	return err
+}
+
+func (s *Storage) DeleteUser(ctx context.Context, userID int64) error {
+	// First delete related records to maintain integrity
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workouts WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM chat_members WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM message_reactions WHERE user_id = $1`, userID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM users WHERE telegram_id = $1`, userID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func (s *Storage) GetAllActiveUsers(ctx context.Context) ([]User, error) {
 	query := `SELECT telegram_id, username, days_trained, is_active, failed_at FROM users WHERE is_active = true`
 

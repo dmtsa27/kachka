@@ -1,0 +1,270 @@
+basePath: /
+definitions:
+  api.AddWorkoutRequest:
+    properties:
+      amount:
+        type: integer
+      chat_id:
+        type: integer
+      username:
+        type: string
+    required:
+    - amount
+    - chat_id
+    - username
+    type: object
+  domain.Challenge:
+    properties:
+      challengeID:
+        type: integer
+      chatID:
+        format: int64
+        type: integer
+      daysPerWeek:
+        type: integer
+      duration:
+        type: integer
+      isActive:
+        type: boolean
+      lastDailyStatsAt:
+        type: string
+      lastWeeklyCheckAt:
+        type: string
+      price:
+        type: integer
+      startedAt:
+        type: string
+    type: object
+  domain.User:
+    properties:
+      daysTrained:
+        type: integer
+      failedAt:
+        type: string
+      isActive:
+        type: boolean
+      telegramID:
+        format: int64
+        type: integer
+      username:
+        type: string
+    type: object
+  domain.UserStats:
+    properties:
+      hasWorkoutToday:
+        type: boolean
+      isActive:
+        type: boolean
+      telegramID:
+        format: int64
+        type: integer
+      totalCount:
+        type: integer
+      username:
+        type: string
+      weeklyCount:
+        type: integer
+    type: object
+host: localhost:8080
+info:
+  contact: {}
+  description: Admin API for Kachka Bot challenge management.
+  title: Kachka Bot API
+  version: "1.0"
+paths:
+  /admin/challenges:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.Challenge'
+            type: array
+      summary: List all active challenges
+      tags:
+      - admin
+  /admin/challenges/{id}:
+    delete:
+      parameters:
+      - description: Challenge ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+      summary: Delete challenge
+      tags:
+      - admin
+    get:
+      parameters:
+      - description: Challenge ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.Challenge'
+      summary: Get challenge by ID
+      tags:
+      - admin
+  /admin/stats:
+    get:
+      parameters:
+      - description: Chat ID
+        format: int64
+        in: query
+        name: chat_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.UserStats'
+            type: array
+      summary: Get statistics for a chat
+      tags:
+      - admin
+  /admin/users:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/domain.User'
+            type: array
+      summary: Get all active users
+      tags:
+      - admin
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: User model
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/domain.User'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/domain.User'
+      summary: Create or Upsert user
+      tags:
+      - admin
+  /admin/users/{id}:
+    delete:
+      parameters:
+      - description: Telegram User ID
+        format: int64
+        in: path
+        name: id
+        required: true
+        type: integer
+      responses:
+        "204":
+          description: No Content
+      summary: Delete user and related data
+      tags:
+      - admin
+    get:
+      parameters:
+      - description: Telegram User ID
+        format: int64
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.User'
+      summary: Get user by ID
+      tags:
+      - admin
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Telegram User ID
+        format: int64
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: User model
+        in: body
+        name: user
+        required: true
+        schema:
+          $ref: '#/definitions/domain.User'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/domain.User'
+      summary: Update existing user
+      tags:
+      - admin
+  /admin/workouts:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: Request body
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.AddWorkoutRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+      summary: Add manual workouts for a user
+      tags:
+      - admin
+  /ping:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Ping-pong
+      tags:
+      - health
+swagger: "2.0"

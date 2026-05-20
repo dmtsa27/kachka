@@ -30,6 +30,18 @@ func (c *challengeService) DeactivateChallengeForChat(ctx context.Context, chatI
 }
 
 // ActiveChallenges returns all active challenges.
+func (c *challengeService) GetChallenge(ctx context.Context, challengeID int) (*domain.Challenge, error) {
+	return c.challenge.GetChallenge(ctx, challengeID)
+}
+
+func (c *challengeService) UpdateChallenge(ctx context.Context, challenge domain.Challenge) error {
+	return c.challenge.UpdateChallenge(ctx, challenge)
+}
+
+func (c *challengeService) DeleteChallenge(ctx context.Context, challengeID int) error {
+	return c.challenge.DeleteChallenge(ctx, challengeID)
+}
+
 func (c *challengeService) ActiveChallenges(ctx context.Context) ([]domain.Challenge, error) {
 	challenges, err := c.challenge.GetAllActiveChallenges(ctx)
 	if err != nil {
@@ -72,6 +84,15 @@ func (c *challengeService) MarkWeeklyCheckDone(ctx context.Context, challengeID 
 
 func (c *challengeService) MarkDailyStatsDone(ctx context.Context, challengeID int) error {
 	return c.challenge.MarkDailyStatsDone(ctx, challengeID)
+}
+
+func (c *challengeService) AddWorkoutDirect(ctx context.Context, chatID int64, username string, amount int) (int, error) {
+	userID, err := c.users.GetUserIDByUsername(ctx, username)
+	if err != nil {
+		return 0, err
+	}
+
+	return c.workouts.AddWorkouts(ctx, userID, chatID, amount)
 }
 
 func (c *challengeService) GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error) {

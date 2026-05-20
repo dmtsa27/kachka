@@ -21,6 +21,18 @@ func (u *userService) RegisterUser(ctx context.Context, telegramID int64, userna
 	})
 }
 
+func (u *userService) ReadUser(ctx context.Context, telegramID int64) (*domain.User, error) {
+	return u.users.ReadUser(ctx, telegramID)
+}
+
+func (u *userService) UpdateUser(ctx context.Context, user domain.User) error {
+	return u.users.UpdateUser(ctx, user)
+}
+
+func (u *userService) DeleteUser(ctx context.Context, telegramID int64) error {
+	return u.users.DeleteUser(ctx, telegramID)
+}
+
 func (u *userService) IsActiveUser(ctx context.Context, userID int64) (bool, error) {
 	user, err := u.users.ReadUser(ctx, userID)
 	if err != nil {
@@ -34,4 +46,8 @@ func (u *userService) IsActiveUser(ctx context.Context, userID int64) (bool, err
 
 func (u *userService) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
 	return u.users.GetUserIDByUsername(ctx, username)
+}
+
+func (u *userService) GetAllActiveUsers(ctx context.Context) ([]domain.User, error) {
+	return u.users.GetAllActiveUsers(ctx)
 }

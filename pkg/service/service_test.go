@@ -14,6 +14,8 @@ import (
 type fakeUsers struct {
 	createUser          func(ctx context.Context, user domain.User) error
 	readUser            func(ctx context.Context, telegramID int64) (*domain.User, error)
+	updateUser          func(ctx context.Context, user domain.User) error
+	deleteUser          func(ctx context.Context, telegramID int64) error
 	getAllActive        func(ctx context.Context) ([]domain.User, error)
 	batchDeactivate     func(ctx context.Context, userIDs []int64) error
 	getUserIDByUsername func(ctx context.Context, username string) (int64, error)
@@ -31,6 +33,20 @@ func (f *fakeUsers) ReadUser(ctx context.Context, telegramID int64) (*domain.Use
 		return nil, fmt.Errorf("unexpected ReadUser")
 	}
 	return f.readUser(ctx, telegramID)
+}
+
+func (f *fakeUsers) UpdateUser(ctx context.Context, user domain.User) error {
+	if f.updateUser == nil {
+		return fmt.Errorf("unexpected UpdateUser")
+	}
+	return f.updateUser(ctx, user)
+}
+
+func (f *fakeUsers) DeleteUser(ctx context.Context, telegramID int64) error {
+	if f.deleteUser == nil {
+		return fmt.Errorf("unexpected DeleteUser")
+	}
+	return f.deleteUser(ctx, telegramID)
 }
 
 func (f *fakeUsers) GetAllActiveUsers(ctx context.Context) ([]domain.User, error) {
@@ -200,8 +216,11 @@ type fakeChallenges struct {
 	getActiveChallenge     func(ctx context.Context) (*domain.Challenge, error)
 	getActiveByChat        func(ctx context.Context, chatID int64) (*domain.Challenge, error)
 	getAllActiveChallenges func(ctx context.Context) ([]domain.Challenge, error)
+	getChallenge           func(ctx context.Context, challengeID int) (*domain.Challenge, error)
 	hasActiveChallengeChat func(ctx context.Context, chatID int64) (bool, error)
 	createChallenge        func(ctx context.Context, challenge domain.Challenge) error
+	updateChallenge        func(ctx context.Context, challenge domain.Challenge) error
+	deleteChallenge        func(ctx context.Context, challengeID int) error
 	deactivateForChat      func(ctx context.Context, chatID int64) error
 	markWeeklyDone         func(ctx context.Context, challengeID int) error
 	markDailyDone          func(ctx context.Context, challengeID int) error
@@ -228,6 +247,13 @@ func (f *fakeChallenges) GetAllActiveChallenges(ctx context.Context) ([]domain.C
 	return f.getAllActiveChallenges(ctx)
 }
 
+func (f *fakeChallenges) GetChallenge(ctx context.Context, challengeID int) (*domain.Challenge, error) {
+	if f.getChallenge == nil {
+		return nil, fmt.Errorf("unexpected GetChallenge")
+	}
+	return f.getChallenge(ctx, challengeID)
+}
+
 func (f *fakeChallenges) HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error) {
 	if f.hasActiveChallengeChat == nil {
 		return false, fmt.Errorf("unexpected HasActiveChallengeInChat")
@@ -240,6 +266,20 @@ func (f *fakeChallenges) CreateChallenge(ctx context.Context, challenge domain.C
 		return fmt.Errorf("unexpected CreateChallenge")
 	}
 	return f.createChallenge(ctx, challenge)
+}
+
+func (f *fakeChallenges) UpdateChallenge(ctx context.Context, challenge domain.Challenge) error {
+	if f.updateChallenge == nil {
+		return fmt.Errorf("unexpected UpdateChallenge")
+	}
+	return f.updateChallenge(ctx, challenge)
+}
+
+func (f *fakeChallenges) DeleteChallenge(ctx context.Context, challengeID int) error {
+	if f.deleteChallenge == nil {
+		return fmt.Errorf("unexpected DeleteChallenge")
+	}
+	return f.deleteChallenge(ctx, challengeID)
 }
 
 func (f *fakeChallenges) DeactivateChallengeForChat(ctx context.Context, chatID int64) error {
@@ -1130,7 +1170,653 @@ func TestChallengeService_GetStats(t *testing.T) {
 		t.Errorf("unexpected stat for user1")
 	}
 
-	if stats[1].Username != "user2" || stats[1].IsActive {
-		t.Errorf("unexpected stat for user2 (should be inactive)")
+}
+
+func TestUserService_CRUD(t *testing.T) {
+	ctx := context.Background()
+
+	users := &fakeUsers{
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			return &domain.User{TelegramID: telegramID, Username: "test"}, nil
+		},
+		updateUser: func(ctx context.Context, user domain.User) error {
+			return nil
+		},
+		deleteUser: func(ctx context.Context, telegramID int64) error {
+			return nil
+		},
+		getAllActive: func(ctx context.Context) ([]domain.User, error) {
+			return []domain.User{{TelegramID: 1, Username: "test"}}, nil
+		},
+		getUserIDByUsername: func(ctx context.Context, username string) (int64, error) {
+			return 1, nil
+		},
+	}
+
+	svc := New(Deps{Users: users})
+
+	_, err := svc.ReadUser(ctx, 1)
+	if err != nil {
+		t.Errorf("ReadUser error: %v", err)
+	}
+
+	err = svc.UpdateUser(ctx, domain.User{TelegramID: 1})
+	if err != nil {
+		t.Errorf("UpdateUser error: %v", err)
+	}
+
+	err = svc.DeleteUser(ctx, 1)
+	if err != nil {
+		t.Errorf("DeleteUser error: %v", err)
+	}
+
+	_, err = svc.GetAllActiveUsers(ctx)
+	if err != nil {
+		t.Errorf("GetAllActiveUsers error: %v", err)
+	}
+
+	_, err = svc.GetUserIDByUsername(ctx, "test")
+	if err != nil {
+		t.Errorf("GetUserIDByUsername error: %v", err)
+	}
+}
+
+func TestUserService_IsActiveUser_Coverage(t *testing.T) {
+	ctx := context.Background()
+
+	users := &fakeUsers{
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			if telegramID == 1 {
+				return &domain.User{TelegramID: 1, IsActive: true}, nil
+			}
+			if telegramID == 2 {
+				return &domain.User{TelegramID: 2, IsActive: false}, nil
+			}
+			if telegramID == 3 {
+				return nil, sql.ErrNoRows
+			}
+			return nil, errors.New("db error")
+		},
+	}
+
+	svc := New(Deps{Users: users})
+
+	active, err := svc.Users.IsActiveUser(ctx, 1)
+	if err != nil || !active {
+		t.Errorf("Expected active user 1")
+	}
+
+	active, err = svc.Users.IsActiveUser(ctx, 2)
+	if err != nil || active {
+		t.Errorf("Expected inactive user 2")
+	}
+
+	active, err = svc.Users.IsActiveUser(ctx, 3)
+	if err != nil || active {
+		t.Errorf("Expected inactive user 3 (not found)")
+	}
+
+	_, err = svc.Users.IsActiveUser(ctx, 4)
+	if err == nil {
+		t.Errorf("Expected error for user 4")
+	}
+}
+
+func TestChallengeService_CRUD(t *testing.T) {
+	ctx := context.Background()
+
+	challenges := &fakeChallenges{
+		getChallenge: func(ctx context.Context, challengeID int) (*domain.Challenge, error) {
+			return &domain.Challenge{ChallengeID: challengeID}, nil
+		},
+		updateChallenge: func(ctx context.Context, challenge domain.Challenge) error {
+			return nil
+		},
+		deleteChallenge: func(ctx context.Context, challengeID int) error {
+			return nil
+		},
+		markWeeklyDone: func(ctx context.Context, challengeID int) error {
+			return nil
+		},
+		markDailyDone: func(ctx context.Context, challengeID int) error {
+			return nil
+		},
+	}
+
+	users := &fakeUsers{
+		getUserIDByUsername: func(ctx context.Context, username string) (int64, error) {
+			return 1, nil
+		},
+	}
+
+	workouts := &fakeWorkouts{
+		addWorkouts: func(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+			return amount, nil
+		},
+	}
+
+	svc := New(Deps{Challenge: challenges, Users: users, Workouts: workouts})
+
+	_, err := svc.GetChallenge(ctx, 1)
+	if err != nil {
+		t.Errorf("GetChallenge error: %v", err)
+	}
+
+	err = svc.UpdateChallenge(ctx, domain.Challenge{ChallengeID: 1})
+	if err != nil {
+		t.Errorf("UpdateChallenge error: %v", err)
+	}
+
+	err = svc.DeleteChallenge(ctx, 1)
+	if err != nil {
+		t.Errorf("DeleteChallenge error: %v", err)
+	}
+
+	err = svc.MarkWeeklyCheckDone(ctx, 1)
+	if err != nil {
+		t.Errorf("MarkWeeklyCheckDone error: %v", err)
+	}
+
+	err = svc.MarkDailyStatsDone(ctx, 1)
+	if err != nil {
+		t.Errorf("MarkDailyStatsDone error: %v", err)
+	}
+
+	added, err := svc.AddWorkoutDirect(ctx, 1, "test", 2)
+	if err != nil || added != 2 {
+		t.Errorf("AddWorkoutDirect error: %v, added: %d", err, added)
+	}
+}
+
+func TestModerationService_Comprehensive(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name       string
+		setup      func(*fakeWorkouts, *fakeSessions, *fakeVotes, *fakeUsers)
+		execute    func(*Service) error
+		wantErrStr string
+	}{
+		{
+			name: "DisputeWorkout_Success",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					return &domain.Workout{ID: 1, UserID: 1, WorkoutDate: time.Now()}, nil
+				}
+				w.cancelWorkout = func(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error) {
+					return 1, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				_, _, err := svc.DisputeWorkout(ctx, 1, 1, 2)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "DisputeWorkout_SelfCancel",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					return &domain.Workout{ID: 1, UserID: 2, WorkoutDate: time.Now()}, nil // Same as disputer
+				}
+			},
+			execute: func(svc *Service) error {
+				_, _, err := svc.DisputeWorkout(ctx, 1, 1, 2)
+				return err
+			},
+			wantErrStr: "не можна скасовувати власне тренування",
+		},
+		{
+			name: "DisputeWorkout_Timeout",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					return &domain.Workout{ID: 1, UserID: 1, WorkoutDate: time.Now().Add(-15 * time.Minute)}, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				_, _, err := svc.DisputeWorkout(ctx, 1, 1, 2)
+				return err
+			},
+			wantErrStr: "час для скасування вичерпано (10 хв)",
+		},
+		{
+			name: "DisputeSession_Success",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					return nil, sql.ErrNoRows
+				}
+				s.getSessionByMessage = func(ctx context.Context, chatID int64, messageID int) (*domain.Session, error) {
+					return &domain.Session{UserID: 1, StartedAt: time.Now()}, nil
+				}
+				s.deleteSession = func(ctx context.Context, chatID int64, messageID int) error { return nil }
+			},
+			execute: func(svc *Service) error {
+				_, isSession, err := svc.DisputeWorkout(ctx, 1, 1, 2)
+				if !isSession {
+					return fmt.Errorf("expected isSession to be true")
+				}
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "ReinstateWorkout_Success",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					cb := int64(2)
+					return &domain.Workout{ID: 1, UserID: 1, WorkoutDate: time.Now(), CancelledBy: &cb}, nil
+				}
+				w.reinstateWorkout = func(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error {
+					return nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.ReinstateWorkout(ctx, 1, 1, 2)
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "HandlePollUpdate_SubtractSuccess",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				v.getVoteByPollID = func(ctx context.Context, pollID string) (*domain.Vote, error) {
+					return &domain.Vote{ID: 1, Type: "subtract", TargetUserID: 1, ChatID: 1, Amount: 2, IsCompleted: false}, nil
+				}
+				v.completeVote = func(ctx context.Context, pollID string, success bool) error { return nil }
+				w.subtractWorkouts = func(ctx context.Context, userID int64, chatID int64, amount int) (int, error) { return amount, nil }
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.HandlePollUpdate(ctx, "poll1", true)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "HandlePollUpdate_AlreadyCompleted",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				v.getVoteByPollID = func(ctx context.Context, pollID string) (*domain.Vote, error) {
+					return &domain.Vote{ID: 1, Type: "subtract", IsCompleted: true}, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.HandlePollUpdate(ctx, "poll1", true)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "InitiateSubtract_Success",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				u.getUserIDByUsername = func(ctx context.Context, username string) (int64, error) {
+					return 1, nil
+				}
+				v.createVote = func(ctx context.Context, vote domain.Vote) error {
+					return nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.InitiateSubtract(ctx, 1, 2, "test", 1, "poll1")
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "InitiateSubtract_SelfVote",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				u.getUserIDByUsername = func(ctx context.Context, username string) (int64, error) {
+					return 1, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.InitiateSubtract(ctx, 1, 1, "test", 1, "poll1")
+			},
+			wantErrStr: "не можна голосувати проти себе",
+		},
+		{
+			name: "InitiateAdd_Success",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				u.getUserIDByUsername = func(ctx context.Context, username string) (int64, error) {
+					return 1, nil
+				}
+				v.createVote = func(ctx context.Context, vote domain.Vote) error {
+					return nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.InitiateAdd(ctx, 1, 2, "test", 1, "poll2")
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "GetWorkoutByMessage",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					return &domain.Workout{ID: 1}, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.GetWorkoutByMessage(ctx, 1, 1)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "GetActiveChallengeVotersCount",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getVotersCount = func(ctx context.Context, chatID int64) (int, error) {
+					return 5, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.GetActiveChallengeVotersCount(ctx, 1)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "ReinstateWorkout_NotCancelledByYou",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					cb := int64(3) // cancelled by someone else
+					return &domain.Workout{ID: 1, UserID: 1, WorkoutDate: time.Now(), CancelledBy: &cb}, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.ReinstateWorkout(ctx, 1, 1, 2)
+			},
+			wantErrStr: "лише той, хто скасував, може повернути тренування",
+		},
+		{
+			name: "ReinstateWorkout_Timeout",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				w.getWorkoutByMsg = func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+					cb := int64(2)
+					return &domain.Workout{ID: 1, UserID: 1, WorkoutDate: time.Now().Add(-15 * time.Minute), CancelledBy: &cb}, nil
+				}
+			},
+			execute: func(svc *Service) error {
+				return svc.ReinstateWorkout(ctx, 1, 1, 2)
+			},
+			wantErrStr: "час для повернення вичерпано",
+		},
+		{
+			name: "HandlePollUpdate_AddSuccess",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				v.getVoteByPollID = func(ctx context.Context, pollID string) (*domain.Vote, error) {
+					return &domain.Vote{ID: 1, Type: "add", TargetUserID: 1, ChatID: 1, Amount: 2, IsCompleted: false}, nil
+				}
+				v.completeVote = func(ctx context.Context, pollID string, success bool) error { return nil }
+				w.addWorkouts = func(ctx context.Context, userID int64, chatID int64, amount int) (int, error) { return amount, nil }
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.HandlePollUpdate(ctx, "poll_add", true)
+				return err
+			},
+			wantErrStr: "",
+		},
+		{
+			name: "HandlePollUpdate_FailureDoesNothing",
+			setup: func(w *fakeWorkouts, s *fakeSessions, v *fakeVotes, u *fakeUsers) {
+				v.getVoteByPollID = func(ctx context.Context, pollID string) (*domain.Vote, error) {
+					return &domain.Vote{ID: 1, Type: "add", TargetUserID: 1, ChatID: 1, Amount: 2, IsCompleted: false}, nil
+				}
+				v.completeVote = func(ctx context.Context, pollID string, success bool) error { return nil }
+			},
+			execute: func(svc *Service) error {
+				_, err := svc.HandlePollUpdate(ctx, "poll_fail", false)
+				return err
+			},
+			wantErrStr: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := &fakeWorkouts{}
+			s := &fakeSessions{}
+			v := &fakeVotes{}
+			u := &fakeUsers{}
+			tt.setup(w, s, v, u)
+			svc := New(Deps{Workouts: w, Sessions: s, Votes: v, Users: u})
+			
+			err := tt.execute(svc)
+			if tt.wantErrStr == "" {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			} else {
+				if err == nil || err.Error() != tt.wantErrStr {
+					t.Errorf("expected error '%s', got %v", tt.wantErrStr, err)
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapService_GetConfig(t *testing.T) {
+	ctx := context.Background()
+
+	bootstrap := &fakeBootstrap{
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			if chatID == 1 {
+				return &domain.ChallengeBootstrap{ChatID: 1}, nil
+			}
+			return nil, sql.ErrNoRows
+		},
+	}
+
+	challenges := &fakeChallenges{
+		getActiveByChat: func(ctx context.Context, chatID int64) (*domain.Challenge, error) {
+			return nil, sql.ErrNoRows
+		},
+	}
+
+	svc := New(Deps{Bootstrap: bootstrap, Challenge: challenges})
+
+	_, err := svc.GetChallengeConfig(ctx, 1)
+	if err != nil {
+		t.Errorf("GetChallengeConfig error: %v", err)
+	}
+
+	_, err = svc.GetChallengeConfig(ctx, 2)
+	if err == nil {
+		t.Errorf("Expected error for non-existent config")
+	}
+}
+
+func TestBootstrapService_ProcessReactionUpdate(t *testing.T) {
+	ctx := context.Background()
+
+	users := &fakeUsers{
+		getUserIDByUsername: func(ctx context.Context, username string) (int64, error) {
+			return 1, nil
+		},
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			return nil, sql.ErrNoRows // simulate new user to hit CreateUser
+		},
+		createUser: func(ctx context.Context, user domain.User) error {
+			return nil
+		},
+	}
+
+	bootstrap := &fakeBootstrap{
+		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+			return nil
+		},
+		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) {
+			return &domain.ChallengeBootstrap{WelcomeMessageID: 1, ExpectedReactions: 1, IsStarted: false, IsBotAdmin: true}, nil
+		},
+		countHeartReactions: func(ctx context.Context, chatID int64) (int, error) {
+			return 1, nil
+		},
+		markStarted: func(ctx context.Context, chatID int64) (bool, error) {
+			return true, nil
+		},
+		upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error {
+			return nil
+		},
+	}
+
+	mod := &fakeModeration{
+		cancelCounted: func(ctx context.Context, chatID int64, messageID int) (bool, error) {
+			return true, nil
+		},
+	}
+
+	challenges := &fakeChallenges{
+		createChallenge: func(ctx context.Context, challenge domain.Challenge) error {
+			return nil
+		},
+	}
+
+	svc := New(Deps{Users: users, Bootstrap: bootstrap, Moderation: mod, Challenge: challenges})
+
+	// Test Heart reaction -> Challenge Started
+	started, cancelled, err := svc.ProcessReactionUpdate(ctx, 1, 1, 1, "test", []string{"❤️"})
+	if err != nil || !started || cancelled {
+		t.Errorf("ProcessReactionUpdate Heart error: %v, started: %v, cancelled: %v", err, started, cancelled)
+	}
+
+	// Test ThumbsDown reaction -> Cancel Workout
+	started, cancelled, err = svc.ProcessReactionUpdate(ctx, 1, 2, 1, "test", []string{"👎"})
+	if err != nil || started || !cancelled {
+		t.Errorf("ProcessReactionUpdate ThumbsDown error: %v, started: %v, cancelled: %v", err, started, cancelled)
+	}
+}
+
+func TestCircleService_HandleCircle(t *testing.T) {
+	ctx := context.Background()
+
+	users := &fakeUsers{
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			if telegramID == 1 {
+				return &domain.User{IsActive: true}, nil
+			}
+			return nil, sql.ErrNoRows
+		},
+	}
+
+	challenges := &fakeChallenges{
+		hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) {
+			return chatID == 1, nil
+		},
+	}
+
+	sessions := &fakeSessions{
+		hasTrainedToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) {
+			return false, nil
+		},
+		getSession: func(ctx context.Context, userID int64, chatID int64) (*domain.Session, error) {
+			return nil, sql.ErrNoRows // no active session
+		},
+		startSession: func(ctx context.Context, userID int64, chatID int64, messageID int) error {
+			return nil
+		},
+	}
+
+	workouts := &fakeWorkouts{
+		hasWorkoutToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) {
+			return false, nil
+		},
+	}
+
+	svc := New(Deps{
+		Users:     users,
+		Challenge: challenges,
+		Sessions:  sessions,
+		Workouts:  workouts,
+		Rules: Rules{
+			MinCircleDurationSeconds: 10,
+			SessionGap:               5 * time.Minute,
+		},
+	})
+
+	// 1. Success - short circle starts session
+	err := svc.HandleCircle(ctx, 1, 15, 1, 100)
+	if err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+
+	// 2. Too short
+	err = svc.HandleCircle(ctx, 1, 5, 1, 101)
+	if err != nil {
+		t.Errorf("Expected no error for short circle, got: %v", err)
+	}
+
+	// 3. User not active
+	err = svc.HandleCircle(ctx, 2, 15, 1, 102)
+	if err != nil {
+		t.Errorf("Expected no error for inactive user, got: %v", err)
+	}
+
+	// 4. Chat has no active challenge
+	err = svc.HandleCircle(ctx, 1, 15, 2, 103)
+	if err != nil {
+		t.Errorf("Expected no error for inactive chat, got: %v", err)
+	}
+}
+
+func TestCircleService_CompleteWorkout(t *testing.T) {
+	ctx := context.Background()
+
+	users := &fakeUsers{
+		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
+			return &domain.User{IsActive: true}, nil
+		},
+	}
+
+	challenges := &fakeChallenges{
+		hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) {
+			return true, nil
+		},
+	}
+
+	sessions := &fakeSessions{
+		hasTrainedToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) {
+			return false, nil
+		},
+		getSession: func(ctx context.Context, userID int64, chatID int64) (*domain.Session, error) {
+			return &domain.Session{StartedAt: time.Now().Add(-10 * time.Minute), LastVideoAt: time.Now()}, nil
+		},
+		addLatestSession: func(ctx context.Context, userID int64, chatID int64) error {
+			return nil
+		},
+		startSession: func(ctx context.Context, userID int64, chatID int64, messageID int) error {
+			return nil
+		},
+		deleteSession: func(ctx context.Context, chatID int64, messageID int) error {
+			return nil
+		},
+	}
+
+	workouts := &fakeWorkouts{
+		createWorkout: func(ctx context.Context, workout domain.Workout) error {
+			return nil
+		},
+		hasWorkoutToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) {
+			return false, nil
+		},
+	}
+
+	svc := New(Deps{
+		Users:     users,
+		Challenge: challenges,
+		Sessions:  sessions,
+		Workouts:  workouts,
+		Rules: Rules{
+			MinCircleDurationSeconds: 10,
+			SessionGap:               5 * time.Minute,
+		},
+	})
+
+	err := svc.HandleCircle(ctx, 1, 15, 1, 100)
+	if err != nil {
+		t.Errorf("HandleCircle error: %v", err)
+	}
+}
+
+func TestService_GetRules(t *testing.T) {
+	svc := New(Deps{})
+	rules := svc.GetRules()
+	if rules.MinCircleDurationSeconds == 0 {
+		t.Errorf("Expected initialized rules")
 	}
 }

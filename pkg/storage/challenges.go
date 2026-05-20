@@ -175,6 +175,12 @@ func (s *Storage) MarkDailyStatsDone(ctx context.Context, challengeID int) error
 
 // DeactivateChallengeForChat деактивує активний челендж та очищує дані для конкретного чату.
 // Викликається коли бота кікають або чат видаляється.
+func (s *Storage) DeleteChallenge(ctx context.Context, challengeID int) error {
+	query := `DELETE FROM challenges WHERE id = $1`
+	_, err := s.db.ExecContext(ctx, query, challengeID)
+	return err
+}
+
 func (s *Storage) DeactivateChallengeForChat(ctx context.Context, chatID int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
