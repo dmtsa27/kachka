@@ -43,9 +43,9 @@ type SessionRepository interface {
 type WorkoutRepository interface {
 	HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error)
 	CreateWorkout(ctx context.Context, workout domain.Workout) error
-	WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error)
-	// GetWorkoutCounts returns workout counts for all active users since weekStart.
-	GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error)
+	WeeklyWorkouts(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error)
+	// GetWorkoutCounts returns workout counts for all active users in a chat since weekStart.
+	GetWorkoutCounts(ctx context.Context, chatID int64, weekStart time.Time) ([]UserWorkouts, error)
 	CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (targetUserID int64, err error)
 	ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
 	GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)

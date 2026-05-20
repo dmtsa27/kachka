@@ -50,12 +50,25 @@ func (c *challengeService) ActiveChallenges(ctx context.Context) ([]domain.Chall
 	return challenges, nil
 }
 
-func (c *challengeService) WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]UserInfo, error) {
-	elapsed := time.Since(challenge.StartedAt)
-	weekNumber := int(elapsed / (7 * 24 * time.Hour))
-	weekStart := challenge.StartedAt.Add(time.Duration(weekNumber) * 7 * 24 * time.Hour)
+func getWeekStart(t time.Time) time.Time {
+	// Normalize to UTC midnight
+	t = t.UTC()
+	t = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	// Find previous Monday
+	offset := int(t.Weekday()) - 1
+	if offset < 0 {
+		offset = 6 // Sunday -> Monday is -6 days
+	}
+	return t.AddDate(0, 0, -offset)
+}
 
-	userCounts, err := c.workouts.GetWorkoutCounts(ctx, weekStart)
+func (c *challengeService) WeeklyCheck(ctx context.Context, challenge domain.Challenge) ([]UserInfo, error) {
+	weekStart := getWeekStart(time.Now())
+	// If the challenge started this week, use the previous week's start to avoid skipping check
+	// OR better: check if it's already time to check based on challenge.StartedAt.
+	// For now, let's just use the current Monday.
+	
+	userCounts, err := c.workouts.GetWorkoutCounts(ctx, challenge.ChatID, weekStart)
 	if err != nil {
 		return nil, fmt.Errorf("get workout counts: %w", err)
 	}
@@ -96,14 +109,11 @@ func (c *challengeService) AddWorkoutDirect(ctx context.Context, chatID int64, u
 }
 
 func (c *challengeService) GetStats(ctx context.Context, chatID int64) ([]domain.UserStats, error) {
-	challenge, err := c.challenge.GetActiveChallengeByChat(ctx, chatID)
+	_, err := c.challenge.GetActiveChallengeByChat(ctx, chatID)
 	if err != nil {
 		return nil, fmt.Errorf("get active challenge: %w", err)
 	}
 
-	elapsed := time.Since(challenge.StartedAt)
-	weekNumber := int(elapsed / (7 * 24 * time.Hour))
-	weekStart := challenge.StartedAt.Add(time.Duration(weekNumber) * 7 * 24 * time.Hour)
-
+	weekStart := getWeekStart(time.Now())
 	return c.workouts.GetChatStats(ctx, chatID, weekStart)
 }

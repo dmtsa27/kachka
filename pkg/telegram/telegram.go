@@ -814,10 +814,13 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			success := false
 			var finalPoll *telego.Poll
 
+			log.Printf("Subtract poll started: pID=%s, expectedVoters=%d", pID, expVoters)
+
 		loop:
 			for {
 				select {
 				case <-timer.C:
+					log.Printf("Subtract poll %s timed out", pID)
 					break loop
 				case p := <-pollChan:
 					yes, no := 0, 0
@@ -829,6 +832,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 							no = opt.VoterCount
 						}
 					}
+					log.Printf("Subtract poll %s update: yes=%d, no=%d", pID, yes, no)
 					if no > 0 {
 						success = false
 						break loop
@@ -840,6 +844,8 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 				}
 			}
 
+			log.Printf("Subtract poll %s loop ended. success=%v", pID, success)
+
 			// Stop the poll in Telegram
 			p, err := bot.client.StopPoll(context.Background(), &telego.StopPollParams{
 				ChatID:    telego.ChatID{ID: chatID},
@@ -847,6 +853,8 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			})
 			if err == nil {
 				finalPoll = p
+			} else {
+				log.Printf("Subtract poll %s StopPoll error: %v", pID, err)
 			}
 
 			// If StopPoll succeeded and we haven't reached success yet, re-evaluate
@@ -866,6 +874,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			}
 
 			subtracted, err := bot.service.HandlePollUpdate(context.Background(), pID, success)
+			log.Printf("Subtract poll %s HandlePollUpdate result: subtracted=%d, err=%v", pID, subtracted, err)
 			if err != nil {
 				log.Printf("HandlePollUpdate error: %v", err)
 				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для @%s", tUser))
@@ -1001,6 +1010,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 			}
 
 			added, err := bot.service.HandlePollUpdate(context.Background(), pID, success)
+			log.Printf("Add poll %s HandlePollUpdate result: added=%d, err=%v", pID, added, err)
 			if err != nil {
 				log.Printf("HandlePollUpdate error: %v", err)
 				_, _ = bot.SendMessage(context.Background(), chatID, fmt.Sprintf("❌ Помилка обробки результатів голосування для @%s", tUser))

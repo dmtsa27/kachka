@@ -124,8 +124,8 @@ func (f *fakeSessions) DeleteSessionToday(ctx context.Context, chatID int64, mes
 type fakeWorkouts struct {
 	hasWorkoutToday  func(ctx context.Context, userID int64, chatID int64) (bool, error)
 	createWorkout    func(ctx context.Context, workout domain.Workout) error
-	weeklyWorkouts   func(ctx context.Context, userID int64, weekStart time.Time) (int, error)
-	getWorkoutCounts func(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error)
+	weeklyWorkouts   func(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error)
+	getWorkoutCounts func(ctx context.Context, chatID int64, weekStart time.Time) ([]UserWorkouts, error)
 	cancelWorkout    func(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error)
 	reinstateWorkout func(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error
 	getWorkoutByMsg  func(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error)
@@ -149,18 +149,18 @@ func (f *fakeWorkouts) CreateWorkout(ctx context.Context, workout domain.Workout
 	return f.createWorkout(ctx, workout)
 }
 
-func (f *fakeWorkouts) WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error) {
+func (f *fakeWorkouts) WeeklyWorkouts(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) {
 	if f.weeklyWorkouts == nil {
 		return 0, fmt.Errorf("unexpected WeeklyWorkouts")
 	}
-	return f.weeklyWorkouts(ctx, userID, weekStart)
+	return f.weeklyWorkouts(ctx, userID, chatID, weekStart)
 }
 
-func (f *fakeWorkouts) GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error) {
+func (f *fakeWorkouts) GetWorkoutCounts(ctx context.Context, chatID int64, weekStart time.Time) ([]UserWorkouts, error) {
 	if f.getWorkoutCounts == nil {
 		return nil, fmt.Errorf("unexpected GetWorkoutCounts")
 	}
-	return f.getWorkoutCounts(ctx, weekStart)
+	return f.getWorkoutCounts(ctx, chatID, weekStart)
 }
 
 func (f *fakeWorkouts) CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error) {
@@ -525,7 +525,7 @@ func TestHandleCircle_StartsSession(t *testing.T) {
 			createdWorkout = true
 			return nil
 		},
-		weeklyWorkouts: func(ctx context.Context, userID int64, weekStart time.Time) (int, error) {
+		weeklyWorkouts: func(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) {
 			return 0, nil
 		},
 	}
@@ -646,7 +646,7 @@ func TestHandleCircle_CompletesWorkout(t *testing.T) {
 			createdWorkout = true
 			return nil
 		},
-		weeklyWorkouts: func(ctx context.Context, userID int64, weekStart time.Time) (int, error) { return 0, nil },
+		weeklyWorkouts: func(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) { return 0, nil },
 	}
 
 	challenges := &fakeChallenges{
@@ -817,9 +817,10 @@ func TestWeeklyCheck_DeactivatesFailed(t *testing.T) {
 	workouts := &fakeWorkouts{
 		hasWorkoutToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) { return false, nil },
 		createWorkout: func(ctx context.Context, workout domain.Workout) error { return nil },
-		getWorkoutCounts: func(ctx context.Context, weekStart time.Time) ([]UserWorkouts, error) {
-			if weekStart.Before(startedAt.Add(7 * 24 * time.Hour)) {
-				return nil, fmt.Errorf("unexpected week start")
+		getWorkoutCounts: func(ctx context.Context, chatID int64, weekStart time.Time) ([]UserWorkouts, error) {
+			expectedWeekStart := getWeekStart(time.Now())
+			if weekStart.Unix() != expectedWeekStart.Unix() {
+				return nil, fmt.Errorf("unexpected week start: got %v, want %v", weekStart, expectedWeekStart)
 			}
 			return []UserWorkouts{
 				{UserInfo: UserInfo{TelegramID: 10, Username: "a"}, Count: 2},
@@ -1139,8 +1140,7 @@ func TestChallengeService_GetStats(t *testing.T) {
 
 	workouts := &fakeWorkouts{
 		getChatStats: func(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
-			// Expected weekStart should be startedAt + 7 days
-			expectedWeekStart := startedAt.Add(7 * 24 * time.Hour)
+			expectedWeekStart := getWeekStart(time.Now())
 			if weekStart.Unix() != expectedWeekStart.Unix() {
 				return nil, fmt.Errorf("unexpected week start: got %v, want %v", weekStart, expectedWeekStart)
 			}

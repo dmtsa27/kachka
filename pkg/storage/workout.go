@@ -2,7 +2,6 @@ package storage
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/dmtsa27/kachka.git/pkg/domain"
@@ -16,35 +15,39 @@ func (s *Storage) CreateWorkout(ctx context.Context, workout Workout) error {
 	return err
 }
 
-func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, weekStart time.Time) (int, error) {
+func (s *Storage) WeeklyWorkouts(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) {
 	query := `
-        SELECT COUNT(*) 
+        SELECT COUNT(DISTINCT CAST(workout_date AS DATE)) 
         FROM workouts 
         WHERE user_id = $1 
-          AND workout_date >= $2
-          AND workout_date < $2 + INTERVAL '7 days'
+          AND chat_id = $2
+          AND workout_date >= $3
+          AND workout_date < $3 + INTERVAL '7 days'
           AND is_cancelled = false`
 
 	var count int
-	err := s.db.QueryRowContext(ctx, query, userID, weekStart).Scan(&count)
+	err := s.db.QueryRowContext(ctx, query, userID, chatID, weekStart).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
-func (s *Storage) GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]service.UserWorkouts, error) {
+func (s *Storage) GetWorkoutCounts(ctx context.Context, chatID int64, weekStart time.Time) ([]service.UserWorkouts, error) {
 	query := `
-        SELECT u.telegram_id, u.username, COUNT(DISTINCT CAST(w.workout_date AS DATE)) as workout_count
-        FROM users u
-        LEFT JOIN workouts w ON u.telegram_id = w.user_id 
-            AND w.workout_date >= $1 
-            AND w.workout_date < $1 + INTERVAL '7 days'
-            AND w.is_cancelled = false
-        WHERE u.is_active = true
-        GROUP BY u.telegram_id, u.username`
+        SELECT u.telegram_id, u.username, 
+               (SELECT COUNT(DISTINCT CAST(w.workout_date AS DATE))
+                FROM workouts w
+                WHERE w.user_id = u.telegram_id
+                  AND w.chat_id = $1
+                  AND w.workout_date >= $2 
+                  AND w.workout_date < $2 + INTERVAL '7 days'
+                  AND w.is_cancelled = false) as workout_count
+        FROM chat_members cm
+        JOIN users u ON u.telegram_id = cm.user_id
+        WHERE cm.chat_id = $1 AND cm.is_active = true AND cm.is_bot = false AND u.is_active = true`
 
-	rows, err := s.db.QueryContext(ctx, query, weekStart)
+	rows, err := s.db.QueryContext(ctx, query, chatID, weekStart)
 	if err != nil {
 		return nil, err
 	}
@@ -63,14 +66,17 @@ func (s *Storage) GetWorkoutCounts(ctx context.Context, weekStart time.Time) ([]
 }
 
 func (s *Storage) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
+	now := time.Now().UTC()
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM workouts 
-			WHERE user_id = $1 AND chat_id = $2 AND CAST(workout_date AS DATE) = CURRENT_DATE AND is_cancelled = false
+			WHERE user_id = $1 AND chat_id = $2 
+			AND CAST(workout_date AS DATE) = CAST($3 AS DATE) 
+			AND is_cancelled = false
 		)`
 
 	var exists bool
-	err := s.db.QueryRowContext(ctx, query, userID, chatID).Scan(&exists)
+	err := s.db.QueryRowContext(ctx, query, userID, chatID, now).Scan(&exists)
 	if err != nil {
 		return false, err
 	}
@@ -114,22 +120,22 @@ func (s *Storage) GetWorkoutByMessage(ctx context.Context, chatID int64, message
 }
 
 func (s *Storage) AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
-	// To "add" workouts, we create new workout records for previous dates.
-	// We skip days that already have a workout (unique per user/chat/date).
-	count := 0
 	added := 0
-	// We try to find 'amount' available days starting from today and going backwards
-	for i := 0; added < amount && i < 30; i++ { // limit to 30 days back to avoid infinite loop
-		query := fmt.Sprintf(`
+	now := time.Now().UTC()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+
+	for i := 0; added < amount && i < 14; i++ {
+		date := today.AddDate(0, 0, -i)
+		query := `
 			INSERT INTO workouts (user_id, workout_date, chat_id, completion_message_id)
-			SELECT $1, (CAST(NOW() AS DATE) - INTERVAL '%d days'), $2, 0
+			SELECT $1, $2, $3, 0
 			WHERE NOT EXISTS (
 				SELECT 1 FROM workouts 
-				WHERE user_id = $1 AND chat_id = $2 
-				AND CAST(workout_date AS DATE) = (CAST(NOW() AS DATE) - INTERVAL '%d days')
+				WHERE user_id = $1 AND chat_id = $3 
+				AND CAST(workout_date AS DATE) = CAST($2 AS DATE)
 				AND is_cancelled = false
-			)`, i, i)
-		res, err := s.db.ExecContext(ctx, query, userID, chatID)
+			)`
+		res, err := s.db.ExecContext(ctx, query, userID, date, chatID)
 		if err != nil {
 			return added, err
 		}
@@ -137,12 +143,12 @@ func (s *Storage) AddWorkouts(ctx context.Context, userID int64, chatID int64, a
 		if rows > 0 {
 			added++
 		}
-		count++
 	}
 	return added, nil
 }
 
 func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+	// We want to subtract active workouts, starting from the most recent ones.
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE workouts 
 		SET is_cancelled = true, cancelled_by = 0, cancelled_at = NOW()
@@ -158,7 +164,7 @@ func (s *Storage) SubtractWorkouts(ctx context.Context, userID int64, chatID int
 		return 0, err
 	}
 	affected, err := res.RowsAffected()
-	return int(affected), err
+	return int(affected), nil
 }
 
 func (s *Storage) GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
@@ -166,31 +172,29 @@ func (s *Storage) GetChatStats(ctx context.Context, chatID int64, weekStart time
         SELECT 
             u.telegram_id, 
             COALESCE(u.username, ''), 
-            COUNT(DISTINCT CAST(w_weekly.workout_date AS DATE)) as weekly_count,
-            COUNT(DISTINCT CAST(w_total.workout_date AS DATE)) as total_count,
+            (SELECT COUNT(DISTINCT CAST(w.workout_date AS DATE)) 
+             FROM workouts w 
+             WHERE w.user_id = u.telegram_id AND w.chat_id = $1 
+               AND w.workout_date >= $2 AND w.workout_date < $2 + INTERVAL '7 days'
+               AND w.is_cancelled = false) as weekly_count,
+            (SELECT COUNT(DISTINCT CAST(w.workout_date AS DATE)) 
+             FROM workouts w 
+             WHERE w.user_id = u.telegram_id AND w.chat_id = $1 
+               AND w.is_cancelled = false) as total_count,
             u.is_active,
             EXISTS(
                 SELECT 1 FROM workouts w_today 
                 WHERE w_today.user_id = u.telegram_id 
                   AND w_today.chat_id = $1 
-                  AND CAST(w_today.workout_date AS DATE) = CURRENT_DATE 
+                  AND CAST(w_today.workout_date AS DATE) = CAST($3 AS DATE) 
                   AND w_today.is_cancelled = false
             ) as has_workout_today
         FROM chat_members cm
         JOIN users u ON u.telegram_id = cm.user_id
-        LEFT JOIN workouts w_weekly ON u.telegram_id = w_weekly.user_id 
-            AND w_weekly.chat_id = cm.chat_id
-            AND w_weekly.workout_date >= $2 
-            AND w_weekly.workout_date < $2 + INTERVAL '7 days'
-            AND w_weekly.is_cancelled = false
-        LEFT JOIN workouts w_total ON u.telegram_id = w_total.user_id 
-            AND w_total.chat_id = cm.chat_id
-            AND w_total.is_cancelled = false
         WHERE cm.chat_id = $1 AND cm.is_bot = false AND cm.is_active = true
-        GROUP BY u.telegram_id, u.username, u.is_active
         ORDER BY weekly_count DESC, total_count DESC`
 
-	rows, err := s.db.QueryContext(ctx, query, chatID, weekStart)
+	rows, err := s.db.QueryContext(ctx, query, chatID, weekStart, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
