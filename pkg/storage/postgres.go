@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"time"
 
 	"github.com/dmtsa27/kachka.git/pkg/service"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -44,6 +45,13 @@ func NewPostgresDB(ctx context.Context, connStr string) (*Storage, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Налаштування пулу з'єднань для стабільної роботи з pgx
+	mydb.SetMaxOpenConns(25)
+	mydb.SetMaxIdleConns(25)
+	mydb.SetConnMaxLifetime(5 * time.Minute)
+	mydb.SetConnMaxIdleTime(5 * time.Minute)
+
 	if err := mydb.Ping(); err != nil {
 		return nil, err
 	}
