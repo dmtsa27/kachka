@@ -8,7 +8,6 @@ linters:
     - staticcheck
     - typecheck
     - unused
-    - gofmt
     - misspell
     - revive
 
@@ -24,7 +23,7 @@ linters-settings:
 
 issues:
   exclude-use-default: false
-  # Ігноруємо конкретні типи помилок, щоб не правити код вручну
+  # Ігноруємо конкретні типи помилок
   exclude-rules:
     - linters: [errcheck]
       text: "Error return value of .*(Rollback|Close|Sscanf|Start|Stop).* is not checked"
@@ -34,7 +33,6 @@ issues:
       text: "substract"
     - linters: [ineffassign]
       path: pkg/storage/workout.go
-    - linters: [gofmt]
 
 run:
   timeout: 5m
