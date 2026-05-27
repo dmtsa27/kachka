@@ -7,29 +7,5 @@ services:
       - 8080:8080
     env_file:
       - .env
-    environment:
-      - DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}?sslmode=disable
-    depends_on:
-      db:
-        condition: service_healthy
-
-  db:
-    image: postgres:16-alpine
-    restart: always
-    user: postgres
-    volumes:
-      - db-data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_DB=${DB_NAME}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: [ "CMD", "pg_isready", "-U", "${DB_USER}", "-d", "${DB_NAME}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-volumes:
-  db-data:
+    # Ми прибираємо перевизначення DATABASE_URL, щоб він брався безпосередньо з .env
+    # А також прибираємо залежність від локальної бази db

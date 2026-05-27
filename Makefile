@@ -20,10 +20,9 @@ watchdb:
 	watch -n 2 $(MAKE) dbsnap
 
 up:
-	docker compose up -d db
 	$(MAKE) migrate
 	docker compose up -d --build server
 
 reset:
-	docker compose down -v
+	docker compose down
 	$(MAKE) up
