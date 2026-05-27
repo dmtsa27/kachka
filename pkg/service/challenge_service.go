@@ -67,7 +67,7 @@ func (c *challengeService) WeeklyCheck(ctx context.Context, challenge domain.Cha
 	// If the challenge started this week, use the previous week's start to avoid skipping check
 	// OR better: check if it's already time to check based on challenge.StartedAt.
 	// For now, let's just use the current Monday.
-	
+
 	userCounts, err := c.workouts.GetWorkoutCounts(ctx, challenge.ChatID, weekStart)
 	if err != nil {
 		return nil, fmt.Errorf("get workout counts: %w", err)

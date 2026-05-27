@@ -67,10 +67,6 @@ type Bot struct {
 	handler   *th.BotHandler
 }
 
-type outboxMsg struct {
-	chatID int64
-	text   string
-}
 
 func (bot *Bot) SetService(svc BotService) {
 	bot.service = svc
@@ -894,7 +890,7 @@ func (bot *Bot) registerModerationHandlers(bh *th.BotHandler) {
 
 		return nil
 	}, func(ctx context.Context, u telego.Update) bool {
-		return th.CommandEqual("subtract")(ctx, u) || th.CommandEqual("substract")(ctx, u)
+		return th.CommandEqual("subtract")(ctx, u) || th.CommandEqual("subtract")(ctx, u)
 	})
 
 	// 4. /add @username [amount]

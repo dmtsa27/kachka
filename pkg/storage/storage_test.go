@@ -347,6 +347,3 @@ func TestGetActiveChallenge(t *testing.T) {
 		t.Errorf("unexpected result: %v, %v", ch, err)
 	}
 }
-
-
-

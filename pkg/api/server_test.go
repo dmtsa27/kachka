@@ -26,8 +26,10 @@ func (m *mockUsers) DeleteUser(ctx context.Context, id int64) error         { re
 func (m *mockUsers) GetAllActiveUsers(ctx context.Context) ([]domain.User, error) {
 	return []domain.User{{TelegramID: 1, Username: "test"}}, nil
 }
-func (m *mockUsers) BatchDeactivateUsers(ctx context.Context, ids []int64) error        { return nil }
-func (m *mockUsers) GetUserIDByUsername(ctx context.Context, username string) (int64, error) { return 1, nil }
+func (m *mockUsers) BatchDeactivateUsers(ctx context.Context, ids []int64) error { return nil }
+func (m *mockUsers) GetUserIDByUsername(ctx context.Context, username string) (int64, error) {
+	return 1, nil
+}
 
 func TestHandlePing(t *testing.T) {
 	svc := service.New(service.Deps{})
@@ -116,38 +118,64 @@ func (m *mockChallenges) GetChallenge(ctx context.Context, id int) (*domain.Chal
 	return m.getChallenge(ctx, id)
 }
 func (m *mockChallenges) UpdateChallenge(ctx context.Context, ch domain.Challenge) error { return nil }
-func (m *mockChallenges) DeleteChallenge(ctx context.Context, id int) error            { return nil }
+func (m *mockChallenges) DeleteChallenge(ctx context.Context, id int) error              { return nil }
 func (m *mockChallenges) ActiveChallenges(ctx context.Context) ([]domain.Challenge, error) {
 	return m.activeChallenges(ctx)
 }
 func (m *mockChallenges) HasActiveChallengeInChat(ctx context.Context, chatID int64) (bool, error) {
 	return true, nil
 }
-func (m *mockChallenges) DeactivateChallengeForChat(ctx context.Context, chatID int64) error { return nil }
-func (m *mockChallenges) GetActiveChallenge(ctx context.Context) (*domain.Challenge, error) { return nil, nil }
-func (m *mockChallenges) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*domain.Challenge, error) { return nil, nil }
-func (m *mockChallenges) GetAllActiveChallenges(ctx context.Context) ([]domain.Challenge, error) { return nil, nil }
-func (m *mockChallenges) MarkWeeklyCheckDone(ctx context.Context, id int) error            { return nil }
-func (m *mockChallenges) MarkDailyStatsDone(ctx context.Context, id int) error             { return nil }
-func (m *mockChallenges) SetWeekRules(ctx context.Context, id int, rules string) error      { return nil }
+func (m *mockChallenges) DeactivateChallengeForChat(ctx context.Context, chatID int64) error {
+	return nil
+}
+func (m *mockChallenges) GetActiveChallenge(ctx context.Context) (*domain.Challenge, error) {
+	return nil, nil
+}
+func (m *mockChallenges) GetActiveChallengeByChat(ctx context.Context, chatID int64) (*domain.Challenge, error) {
+	return nil, nil
+}
+func (m *mockChallenges) GetAllActiveChallenges(ctx context.Context) ([]domain.Challenge, error) {
+	return nil, nil
+}
+func (m *mockChallenges) MarkWeeklyCheckDone(ctx context.Context, id int) error        { return nil }
+func (m *mockChallenges) MarkDailyStatsDone(ctx context.Context, id int) error         { return nil }
+func (m *mockChallenges) SetWeekRules(ctx context.Context, id int, rules string) error { return nil }
 
 type mockWorkouts struct {
 	addWorkouts func(ctx context.Context, userID int64, chatID int64, amount int) (int, error)
 }
 
 func (m *mockWorkouts) CreateWorkout(ctx context.Context, w domain.Workout) error { return nil }
-func (m *mockWorkouts) WeeklyWorkouts(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) { return 0, nil }
-func (m *mockWorkouts) GetWorkoutCounts(ctx context.Context, chatID int64, weekStart time.Time) ([]service.UserWorkouts, error) { return nil, nil }
-func (m *mockWorkouts) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) { return false, nil }
-func (m *mockWorkouts) CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error) { return 0, nil }
-func (m *mockWorkouts) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error { return nil }
-func (m *mockWorkouts) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) { return nil, nil }
-func (m *mockWorkouts) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) { return 0, nil }
+func (m *mockWorkouts) WeeklyWorkouts(ctx context.Context, userID int64, chatID int64, weekStart time.Time) (int, error) {
+	return 0, nil
+}
+func (m *mockWorkouts) GetWorkoutCounts(ctx context.Context, chatID int64, weekStart time.Time) ([]service.UserWorkouts, error) {
+	return nil, nil
+}
+func (m *mockWorkouts) HasWorkoutToday(ctx context.Context, userID int64, chatID int64) (bool, error) {
+	return false, nil
+}
+func (m *mockWorkouts) CancelWorkout(ctx context.Context, chatID int64, messageID int, cancelledBy int64) (int64, error) {
+	return 0, nil
+}
+func (m *mockWorkouts) ReinstateWorkout(ctx context.Context, chatID int64, messageID int, reinstatedBy int64) error {
+	return nil
+}
+func (m *mockWorkouts) GetWorkoutByMessage(ctx context.Context, chatID int64, messageID int) (*domain.Workout, error) {
+	return nil, nil
+}
+func (m *mockWorkouts) SubtractWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
+	return 0, nil
+}
 func (m *mockWorkouts) AddWorkouts(ctx context.Context, userID int64, chatID int64, amount int) (int, error) {
 	return m.addWorkouts(ctx, userID, chatID, amount)
 }
-func (m *mockWorkouts) GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) { return nil, nil }
-func (m *mockWorkouts) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) { return 0, nil }
+func (m *mockWorkouts) GetChatStats(ctx context.Context, chatID int64, weekStart time.Time) ([]domain.UserStats, error) {
+	return nil, nil
+}
+func (m *mockWorkouts) GetActiveChallengeVotersCount(ctx context.Context, chatID int64) (int, error) {
+	return 0, nil
+}
 
 func TestHandleGetChallenges(t *testing.T) {
 	m := &mockChallenges{
@@ -202,5 +230,3 @@ func TestHandleAddWorkout(t *testing.T) {
 		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
-
-

@@ -473,7 +473,6 @@ func (f *fakeNotifier) SendMessage(ctx context.Context, chatID int64, text strin
 	return 123, nil // Return a fake message ID
 }
 
-
 func TestHandleCircle_StartsSession(t *testing.T) {
 	ctx := context.Background()
 	notifier := &fakeNotifier{}
@@ -614,8 +613,8 @@ func TestHandleCircle_CompletesWorkout(t *testing.T) {
 		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) {
 			return &domain.User{TelegramID: telegramID, IsActive: true}, nil
 		},
-		createUser: func(ctx context.Context, user domain.User) error { return nil },
-		getAllActive: func(ctx context.Context) ([]domain.User, error) { return nil, nil },
+		createUser:      func(ctx context.Context, user domain.User) error { return nil },
+		getAllActive:    func(ctx context.Context) ([]domain.User, error) { return nil, nil },
 		batchDeactivate: func(ctx context.Context, userIDs []int64) error { return nil },
 	}
 
@@ -651,20 +650,26 @@ func TestHandleCircle_CompletesWorkout(t *testing.T) {
 
 	challenges := &fakeChallenges{
 		hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) { return true, nil },
-		getActiveChallenge: func(ctx context.Context) (*domain.Challenge, error) { return nil, errors.New("unexpected") },
-		createChallenge: func(ctx context.Context, challenge domain.Challenge) error { return nil },
-		deactivateForChat: func(ctx context.Context, chatID int64) error { return nil },
+		getActiveChallenge:     func(ctx context.Context) (*domain.Challenge, error) { return nil, errors.New("unexpected") },
+		createChallenge:        func(ctx context.Context, challenge domain.Challenge) error { return nil },
+		deactivateForChat:      func(ctx context.Context, chatID int64) error { return nil },
 	}
 
 	bootstrap := &fakeBootstrap{
-		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error { return nil },
-		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
-		setBotAdmin: func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
+		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+			return nil
+		},
+		getBootstrap:     func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
+		setBotAdmin:      func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
 		upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error { return nil },
-		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error { return nil },
+		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+			return nil
+		},
 		countHeartReactions: func(ctx context.Context, chatID int64) (int, error) { return 0, nil },
-		markStarted: func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
-		updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error { return nil },
+		markStarted:         func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
+		updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+			return nil
+		},
 	}
 
 	moderation := &fakeModeration{cancelCounted: func(ctx context.Context, chatID int64, messageID int) (bool, error) { return false, nil }}
@@ -698,21 +703,27 @@ func TestProcessReactionUpdate_CancelsWorkout(t *testing.T) {
 	ctx := context.Background()
 
 	users := &fakeUsers{
-		createUser: func(ctx context.Context, user domain.User) error { return nil },
-		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) { return &domain.User{}, nil },
-		getAllActive: func(ctx context.Context) ([]domain.User, error) { return nil, nil },
+		createUser:      func(ctx context.Context, user domain.User) error { return nil },
+		readUser:        func(ctx context.Context, telegramID int64) (*domain.User, error) { return &domain.User{}, nil },
+		getAllActive:    func(ctx context.Context) ([]domain.User, error) { return nil, nil },
 		batchDeactivate: func(ctx context.Context, userIDs []int64) error { return nil },
 	}
 
 	bootstrap := &fakeBootstrap{
-		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error { return nil },
-		getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
+		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+			return nil
+		},
+		getBootstrap:     func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
 		upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error { return nil },
-		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error { return nil },
-		setBotAdmin: func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
+		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+			return nil
+		},
+		setBotAdmin:         func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
 		countHeartReactions: func(ctx context.Context, chatID int64) (int, error) { return 0, nil },
-		markStarted: func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
-		updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error { return nil },
+		markStarted:         func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
+		updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+			return nil
+		},
 	}
 
 	moderation := &fakeModeration{
@@ -748,10 +759,14 @@ func TestTryStartChallengeIfReady_Starts(t *testing.T) {
 			return &domain.ChallengeBootstrap{ChatID: chatID, ExpectedReactions: 2, IsBotAdmin: true, DaysPerWeek: 3, DurationDays: 180}, nil
 		},
 		countHeartReactions: func(ctx context.Context, chatID int64) (int, error) { return 2, nil },
-		markStarted: func(ctx context.Context, chatID int64) (bool, error) { return true, nil },
-		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error { return nil },
+		markStarted:         func(ctx context.Context, chatID int64) (bool, error) { return true, nil },
+		setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+			return nil
+		},
 		upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error { return nil },
-		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error { return nil },
+		initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+			return nil
+		},
 		setBotAdmin: func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
 	}
 
@@ -761,8 +776,8 @@ func TestTryStartChallengeIfReady_Starts(t *testing.T) {
 			created = true
 			return nil
 		},
-		getActiveChallenge: func(ctx context.Context) (*domain.Challenge, error) { return nil, errors.New("unexpected") },
-		deactivateForChat: func(ctx context.Context, chatID int64) error { return nil },
+		getActiveChallenge:     func(ctx context.Context) (*domain.Challenge, error) { return nil, errors.New("unexpected") },
+		deactivateForChat:      func(ctx context.Context, chatID int64) error { return nil },
 		hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
 	}
 
@@ -794,15 +809,15 @@ func TestWeeklyCheck_DeactivatesFailed(t *testing.T) {
 	challenge := &domain.Challenge{ChatID: 1, DaysPerWeek: 3, StartedAt: startedAt}
 
 	challenges := &fakeChallenges{
-		getActiveChallenge: func(ctx context.Context) (*domain.Challenge, error) { return challenge, nil },
-		createChallenge: func(ctx context.Context, challenge domain.Challenge) error { return nil },
-		deactivateForChat: func(ctx context.Context, chatID int64) error { return nil },
+		getActiveChallenge:     func(ctx context.Context) (*domain.Challenge, error) { return challenge, nil },
+		createChallenge:        func(ctx context.Context, challenge domain.Challenge) error { return nil },
+		deactivateForChat:      func(ctx context.Context, chatID int64) error { return nil },
 		hasActiveChallengeChat: func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
 	}
 
 	users := &fakeUsers{
 		createUser: func(ctx context.Context, user domain.User) error { return nil },
-		readUser: func(ctx context.Context, telegramID int64) (*domain.User, error) { return &domain.User{}, nil },
+		readUser:   func(ctx context.Context, telegramID int64) (*domain.User, error) { return &domain.User{}, nil },
 		getAllActive: func(ctx context.Context) ([]domain.User, error) {
 			return []domain.User{{TelegramID: 10, Username: "a"}, {TelegramID: 11, Username: "b"}}, nil
 		},
@@ -816,7 +831,7 @@ func TestWeeklyCheck_DeactivatesFailed(t *testing.T) {
 
 	workouts := &fakeWorkouts{
 		hasWorkoutToday: func(ctx context.Context, userID int64, chatID int64) (bool, error) { return false, nil },
-		createWorkout: func(ctx context.Context, workout domain.Workout) error { return nil },
+		createWorkout:   func(ctx context.Context, workout domain.Workout) error { return nil },
 		getWorkoutCounts: func(ctx context.Context, chatID int64, weekStart time.Time) ([]UserWorkouts, error) {
 			expectedWeekStart := getWeekStart(time.Now())
 			if weekStart.Unix() != expectedWeekStart.Unix() {
@@ -830,19 +845,25 @@ func TestWeeklyCheck_DeactivatesFailed(t *testing.T) {
 	}
 
 	svc := New(Deps{
-		Users:      users,
-		Sessions:   &fakeSessions{},
-		Workouts:   workouts,
-		Challenge:  challenges,
-		Bootstrap:  &fakeBootstrap{
-			initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error { return nil },
-			getBootstrap: func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
-			setBotAdmin: func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
+		Users:     users,
+		Sessions:  &fakeSessions{},
+		Workouts:  workouts,
+		Challenge: challenges,
+		Bootstrap: &fakeBootstrap{
+			initBootstrap: func(ctx context.Context, chatID int64, welcomeMessageID int, isBotAdmin bool, expectedReactions int) error {
+				return nil
+			},
+			getBootstrap:     func(ctx context.Context, chatID int64) (*domain.ChallengeBootstrap, error) { return nil, sql.ErrNoRows },
+			setBotAdmin:      func(ctx context.Context, chatID int64, isBotAdmin bool) error { return nil },
 			upsertChatMember: func(ctx context.Context, chatID int64, userID int64, isBot bool, isActive bool) error { return nil },
-			setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error { return nil },
+			setReactions: func(ctx context.Context, chatID int64, messageID int, userID int64, emojis []string) error {
+				return nil
+			},
 			countHeartReactions: func(ctx context.Context, chatID int64) (int, error) { return 0, nil },
-			markStarted: func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
-			updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error { return nil },
+			markStarted:         func(ctx context.Context, chatID int64) (bool, error) { return false, nil },
+			updateConfig: func(ctx context.Context, chatID int64, daysPerWeek int, durationDays int, price int) error {
+				return nil
+			},
 		},
 		Moderation: &fakeModeration{cancelCounted: func(ctx context.Context, chatID int64, messageID int) (bool, error) { return false, nil }},
 	})
@@ -982,8 +1003,8 @@ func TestProcessReactionUpdate_EdgeCases(t *testing.T) {
 	}
 
 	svc := New(Deps{
-		Users: &fakeUsers{createUser: func(ctx context.Context, user domain.User) error { return nil }},
-		Bootstrap: bootstrap,
+		Users:      &fakeUsers{createUser: func(ctx context.Context, user domain.User) error { return nil }},
+		Bootstrap:  bootstrap,
 		Moderation: &fakeModeration{cancelCounted: func(ctx context.Context, chatID int64, messageID int) (bool, error) { return false, nil }},
 	})
 
@@ -1093,7 +1114,7 @@ func TestService_DefaultRules(t *testing.T) {
 
 func TestService_FacadeDelegation(t *testing.T) {
 	ctx := context.Background()
-	
+
 	// Testing delegation of methods that were at 0% in service.go
 	svc := New(Deps{
 		Bootstrap: &fakeBootstrap{
@@ -1103,7 +1124,7 @@ func TestService_FacadeDelegation(t *testing.T) {
 			getAllActiveChallenges: func(ctx context.Context) ([]domain.Challenge, error) { return nil, nil },
 		},
 	})
-	
+
 	_ = svc.UpsertChatMember(ctx, 1, 2, false, true)
 	_, _ = svc.ActiveChallenges(ctx)
 }
@@ -1576,7 +1597,7 @@ func TestModerationService_Comprehensive(t *testing.T) {
 			u := &fakeUsers{}
 			tt.setup(w, s, v, u)
 			svc := New(Deps{Workouts: w, Sessions: s, Votes: v, Users: u})
-			
+
 			err := tt.execute(svc)
 			if tt.wantErrStr == "" {
 				if err != nil {
