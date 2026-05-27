@@ -1,6 +1,6 @@
 module github.com/dmtsa27/kachka.git
 
-go 1.25.5
+go 1.24
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
