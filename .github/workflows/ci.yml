@@ -23,6 +23,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
 
   test-and-build:
     name: Test and Build
